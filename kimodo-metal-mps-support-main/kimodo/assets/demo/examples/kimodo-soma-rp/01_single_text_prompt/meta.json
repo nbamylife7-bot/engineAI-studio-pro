@@ -1,0 +1,12 @@
+{
+  "text": "A person runs forward and then leaps over an obstacle in front of them.",
+  "duration": 5.0,
+  "num_samples": 1,
+  "seed": 42,
+  "diffusion_steps": 100,
+  "cfg": {
+    "enabled": true,
+    "text_weight": 2.0,
+    "constraint_weight": 2.0
+  }
+}

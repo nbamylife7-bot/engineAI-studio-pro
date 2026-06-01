@@ -1,0 +1,5 @@
+sphinx>=7.0,<9.0
+nvidia-sphinx-theme
+sphinx-copybutton
+myst-parser
+sphinx-design

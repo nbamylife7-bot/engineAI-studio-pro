@@ -1,0 +1,17 @@
+# Python-зависимости для NVIDIA (после: pip install torch ... --index-url cu124)
+# Полный список системных пакетов — docs/LINUX_FRESH_INSTALL.md
+
+# NF4 text encoder (matbee/kimodo-llm2vec-nf4)
+bitsandbytes>=0.43.0
+accelerate>=0.27.0
+
+# Hugging Face CLI (NF4 matbee — без логина; Kimodo diffusion — может понадобиться hf auth login)
+huggingface_hub>=0.26.0
+hf-transfer>=0.1.8
+
+# Сборка MotionCorrection (pybind11 подтягивается через pip install -e kimodo)
+pybind11>=2.12
+cmake>=3.26
+
+# Ускорение загрузки с HF (опционально, рекомендуется)
+# export HF_HUB_ENABLE_HF_TRANSFER=1

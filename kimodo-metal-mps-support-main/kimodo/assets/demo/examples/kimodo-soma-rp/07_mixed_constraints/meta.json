@@ -1,0 +1,12 @@
+{
+  "text": "A person walking backward points to the right side with their right hand",
+  "duration": 5.066666666666666,
+  "num_samples": 1,
+  "seed": 49,
+  "diffusion_steps": 100,
+  "cfg": {
+    "enabled": true,
+    "text_weight": 2.0,
+    "constraint_weight": 2.0
+  }
+}

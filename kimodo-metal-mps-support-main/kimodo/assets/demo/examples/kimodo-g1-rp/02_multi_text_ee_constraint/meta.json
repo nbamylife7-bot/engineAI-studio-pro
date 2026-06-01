@@ -1,0 +1,18 @@
+{
+  "texts": [
+    "A person walks forward while carrying a box",
+    "A person sets a box down onto the ground"
+  ],
+  "durations": [
+    3.533333333333333,
+    4.066666666666666
+  ],
+  "num_samples": 1,
+  "seed": 60,
+  "diffusion_steps": 100,
+  "cfg": {
+    "enabled": true,
+    "text_weight": 1.0,
+    "constraint_weight": 2.0
+  }
+}

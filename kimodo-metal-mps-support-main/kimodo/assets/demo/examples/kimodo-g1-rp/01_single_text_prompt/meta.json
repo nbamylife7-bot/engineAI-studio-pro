@@ -1,0 +1,12 @@
+{
+  "text": "A person walking forward quickly stumbles but maintains their balance",
+  "duration": 5.0,
+  "num_samples": 1,
+  "seed": 43,
+  "diffusion_steps": 100,
+  "cfg": {
+    "enabled": true,
+    "text_weight": 2.0,
+    "constraint_weight": 2.0
+  }
+}

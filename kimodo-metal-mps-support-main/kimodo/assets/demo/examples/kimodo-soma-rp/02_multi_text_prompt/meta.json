@@ -1,0 +1,18 @@
+{
+  "texts": [
+    "A person is walking forward casually.",
+    "A person turns to the right and starts sneakily moving forward"
+  ],
+  "durations": [
+    3.533333333333333,
+    4.033333333333333
+  ],
+  "num_samples": 1,
+  "seed": 42,
+  "diffusion_steps": 100,
+  "cfg": {
+    "enabled": true,
+    "text_weight": 2.0,
+    "constraint_weight": 2.0
+  }
+}

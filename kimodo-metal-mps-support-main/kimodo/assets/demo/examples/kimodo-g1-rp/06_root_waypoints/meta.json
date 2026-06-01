@@ -1,0 +1,12 @@
+{
+  "text": "A person is walking while carrying a small object in their left hand",
+  "duration": 8.033333333333333,
+  "num_samples": 1,
+  "seed": 61,
+  "diffusion_steps": 100,
+  "cfg": {
+    "enabled": true,
+    "text_weight": 2.0,
+    "constraint_weight": 2.0
+  }
+}

@@ -1,0 +1,12 @@
+{
+  "text": "A person walks diagonally to the left and waves at someone on their right",
+  "duration": 4.966666666666667,
+  "num_samples": 1,
+  "seed": 44,
+  "diffusion_steps": 100,
+  "cfg": {
+    "enabled": true,
+    "text_weight": 2.0,
+    "constraint_weight": 2.0
+  }
+}

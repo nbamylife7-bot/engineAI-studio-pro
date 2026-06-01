@@ -1,0 +1,16 @@
+{%- if show_headings %}
+{{- [basename, "module"] | join(' ') | e | heading }}
+
+{% endif -%}
+.. automodule:: {{ qualname }}
+{%- set preferred_order = ['members', 'undoc-members', 'show-inheritance'] %}
+{%- for option in preferred_order %}
+{%- if option in automodule_options %}
+   :{{ option }}:
+{%- endif %}
+{%- endfor %}
+{%- for option in automodule_options %}
+{%- if option not in preferred_order %}
+   :{{ option }}:
+{%- endif %}
+{%- endfor %}

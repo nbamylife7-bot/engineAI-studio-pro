@@ -1,0 +1,12 @@
+{
+  "text": "A person picks up an object from low on their left side and places it up high",
+  "duration": 5.033333333333333,
+  "num_samples": 1,
+  "seed": 47,
+  "diffusion_steps": 100,
+  "cfg": {
+    "enabled": true,
+    "text_weight": 2.0,
+    "constraint_weight": 2.0
+  }
+}

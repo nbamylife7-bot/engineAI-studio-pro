@@ -1,0 +1,12 @@
+{
+  "text": "A person picks up an object in front of them with two hands and places it to the left side",
+  "duration": 5.033333333333333,
+  "num_samples": 1,
+  "seed": 48,
+  "diffusion_steps": 100,
+  "cfg": {
+    "enabled": true,
+    "text_weight": 2.0,
+    "constraint_weight": 2.0
+  }
+}

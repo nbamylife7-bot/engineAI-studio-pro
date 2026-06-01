@@ -1,0 +1,12 @@
+{
+  "text": "Initially standing still and calm, the person then starts jogging in a counterclockwise arc.",
+  "duration": 6.033333333333333,
+  "num_samples": 1,
+  "seed": 62,
+  "diffusion_steps": 100,
+  "cfg": {
+    "enabled": true,
+    "text_weight": 2.0,
+    "constraint_weight": 2.0
+  }
+}

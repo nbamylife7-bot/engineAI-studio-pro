@@ -1,0 +1,12 @@
+{
+  "text": "A person walks forward and picks something up from the ground",
+  "duration": 5.0,
+  "num_samples": 1,
+  "seed": 43,
+  "diffusion_steps": 100,
+  "cfg": {
+    "enabled": true,
+    "text_weight": 2.0,
+    "constraint_weight": 2.0
+  }
+}

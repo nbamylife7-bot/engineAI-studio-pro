@@ -1,0 +1,12 @@
+{
+  "text": "A person is doing a hip hop dance while moving around",
+  "duration": 6.033333333333333,
+  "num_samples": 1,
+  "seed": 42,
+  "diffusion_steps": 100,
+  "cfg": {
+    "enabled": true,
+    "text_weight": 2.0,
+    "constraint_weight": 2.0
+  }
+}
