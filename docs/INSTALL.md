@@ -2,6 +2,10 @@
 
 Guide for a clean machine or new server. Assume you cloned `engineAI-studio-pro` and work from the repository root.
 
+![Demo screenshot](sceen.png)
+
+**Tested on:** NVIDIA RTX 50xx (Blackwell), **12 GB VRAM**. Single-process demo uses about **7–7.5 GB** GPU memory — **8 GB** may work in theory but is not guaranteed; use the two-process mode if you hit OOM.
+
 ## 0. Expected result
 
 After all steps:
@@ -153,7 +157,9 @@ Browser: http://127.0.0.1:7860
 2. Enter a prompt → **Generate**  
 3. Robot: **Visualize → Show T800 robot (retargeted)** (after generation)
 
-### Low VRAM (~12 GB)
+### Low VRAM (~8–12 GB)
+
+If `./run_demo.sh` runs out of memory, split encoder and demo (works well on 12 GB; also try on 8 GB):
 
 Terminal 1:
 

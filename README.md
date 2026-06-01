@@ -1,5 +1,7 @@
 # EngineAI Studio Pro
 
+![EngineAI Studio Pro demo](docs/sceen.png)
+
 Kimodo demo on **Linux + NVIDIA GPU**: text-to-motion generation, NF4 text encoder ([matbee/kimodo-llm2vec-nf4](https://huggingface.co/matbee/kimodo-llm2vec-nf4)), optional retargeting to the **EngineAI T800** humanoid.
 
 **Model weights are not in the repository** — download them with the scripts below after cloning.
@@ -7,7 +9,7 @@ Kimodo demo on **Linux + NVIDIA GPU**: text-to-motion generation, NF4 text encod
 ## Quick start
 
 ```bash
-git clone https://github.com/YOUR_GITHUB_USERNAME/engineAI-studio-pro.git
+git clone https://github.com/nbamylife7-bot/engineAI-studio-pro.git
 cd engineAI-studio-pro
 
 sudo ./install_system_deps.sh    # once per machine
@@ -26,12 +28,16 @@ Full step-by-step setup, WSL2, RTX 50xx cards, and common errors — **[docs/INS
 
 ## Hardware
 
-- NVIDIA GPU, **12 GB VRAM minimum** (16 GB recommended for single-process `run_demo.sh`)
+**Tested on:** NVIDIA **RTX 50xx** (Blackwell), **12 GB VRAM**, Linux / WSL2.
+
+**VRAM in practice:** single-process `run_demo.sh` (NF4 encoder + diffusion) uses about **7–7.5 GB** on GPU. It may work on **8 GB** cards in theory, but that has not been fully validated — leave headroom or use the two-process split below.
+
+- **12 GB** — comfortable for `./run_demo.sh` (one process)
+- **~8 GB** — try `./run_demo.sh` first; if OOM, use `./run_textencoder.sh` + `./run_demo_api.sh` (see [docs/INSTALL.md](docs/INSTALL.md))
+- **16 GB+** — same as 12 GB, more margin for multi-sample / T800
 - Ubuntu 22.04/24.04 or Debian 12, x86_64 (**WSL2** works)
 - ~40–50 GB disk (conda, PyTorch, models)
-- 16 GB RAM
-
-On **12 GB VRAM**, run encoder and demo in separate processes: `./run_textencoder.sh` and `./run_demo_api.sh` (see INSTALL.md).
+- 16 GB system RAM
 
 ## In git vs downloaded after clone
 

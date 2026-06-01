@@ -19,10 +19,12 @@ Load order in a single process: NF4 first, then diffusion (`kimodo/model/load_mo
 
 ## VRAM
 
+Measured on **RTX 50xx / 12 GB**: one-process demo peaks around **7–7.5 GB** (NF4 + diffusion). **8 GB** may be enough in theory — not fully tested; keep the two-process fallback.
+
 | Mode | Commands | Notes |
 |------|----------|--------|
-| Single process | `./run_demo.sh` | NF4 ~5 GB + diffusion; comfortable from 16 GB |
-| Two processes | `./run_textencoder.sh` + `./run_demo_api.sh` | For ~12 GB |
+| Single process | `./run_demo.sh` | ~7–7.5 GB observed; tested on 12 GB RTX 50xx |
+| Two processes | `./run_textencoder.sh` + `./run_demo_api.sh` | If OOM on 8–12 GB or you want more headroom |
 
 ## CPU (expected)
 

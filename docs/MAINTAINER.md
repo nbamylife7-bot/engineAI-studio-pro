@@ -11,6 +11,12 @@ git status
 ./scripts/verify_gpu_setup.sh   # optional, on a GPU machine
 ```
 
+Commits should show your GitHub user (not an IDE bot). `publish_to_github.sh` sets `user.name` / `user.email` from `GITHUB_USER`. For manual commits:
+
+```bash
+git -c user.name=YOUR_GITHUB_USER -c user.email=YOUR_GITHUB_USER@users.noreply.github.com commit -m "..."
+```
+
 Never commit tokens in `.env.github`.
 
 ## Push to GitHub

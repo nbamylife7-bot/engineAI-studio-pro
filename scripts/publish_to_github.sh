@@ -22,12 +22,13 @@ if ! git rev-parse --git-dir >/dev/null 2>&1; then
   git init -b "${BRANCH}"
 fi
 
-if ! git config user.email >/dev/null 2>&1; then
-  git config user.email "${GIT_AUTHOR_EMAIL:-${GITHUB_USER}@users.noreply.github.com}"
-fi
-if ! git config user.name >/dev/null 2>&1; then
-  git config user.name "${GIT_AUTHOR_NAME:-${GITHUB_USER}}"
-fi
+export GIT_AUTHOR_NAME="${GIT_AUTHOR_NAME:-${GITHUB_USER}}"
+export GIT_AUTHOR_EMAIL="${GIT_AUTHOR_EMAIL:-${GITHUB_USER}@users.noreply.github.com}"
+export GIT_COMMITTER_NAME="${GIT_COMMITTER_NAME:-${GIT_AUTHOR_NAME}}"
+export GIT_COMMITTER_EMAIL="${GIT_COMMITTER_EMAIL:-${GIT_AUTHOR_EMAIL}}"
+# Per-repo identity only (do not touch global git config)
+git config user.name "${GIT_AUTHOR_NAME}"
+git config user.email "${GIT_AUTHOR_EMAIL}"
 
 git add -A
 if git diff --cached --quiet; then
