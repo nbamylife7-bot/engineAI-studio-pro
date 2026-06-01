@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Text encoder API на GPU: matbee/kimodo-llm2vec-nf4 (~5 GB VRAM steady).
+# Text encoder API on GPU: matbee/kimodo-llm2vec-nf4 (~5 GB VRAM steady).
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -23,4 +23,5 @@ export TEXT_ENCODER_QUANTIZATION=none
 export HF_ENABLE_PARALLEL_LOADING=YES
 
 echo "Loading NF4 from ${LLM2VEC_LOCAL_BASE}"
+cd "${KIMODO_REPO}"
 exec kimodo_textencoder --text-encoder llm2vec_nf4 "$@"

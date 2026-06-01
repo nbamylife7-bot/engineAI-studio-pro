@@ -1,6 +1,7 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
+import math
 import os
 
 from kimodo.assets import DEMO_EXAMPLES_ROOT
@@ -48,6 +49,38 @@ KIMODO_T800_HIDE_HUMAN_MESH = os.environ.get("KIMODO_T800_HIDE_HUMAN_MESH", "0")
     "false",
     "no",
 )
+# GMR ik_safety_break for Kimodo→T800 (no effect on jitter; mink only raises on limit violations).
+KIMODO_T800_IK_SAFETY = os.environ.get("KIMODO_T800_IK_SAFETY", "1").strip().lower() not in ("0", "false", "no")
+# Temporal smoothing of T800 qpos after retarget — removes standing IK ping-pong (the real jitter fix).
+KIMODO_T800_SMOOTH = os.environ.get("KIMODO_T800_SMOOTH", "1").strip().lower() not in ("0", "false", "no")
+# Savitzky-Golay window (odd, frames). Larger = smoother but softer fast motion.
+KIMODO_T800_SMOOTH_WINDOW = int(os.environ.get("KIMODO_T800_SMOOTH_WINDOW", "13"))
+# Solve IK every Nth frame and interpolate qpos to full fps (1 = every frame, default).
+# >1 speeds up retarget but can soften fast motion (~1.3x at stride 2); opt-in for slow clips.
+KIMODO_T800_IK_STRIDE = max(1, int(os.environ.get("KIMODO_T800_IK_STRIDE", "1")))
+# Experimental parallel T800 retarget across samples via processes. 0/1 = sequential (default).
+# Set >=2 to opt in (measured ~1.3x only — FK/IK mix limits gains; needs spare CPU cores).
+KIMODO_T800_RETARGET_WORKERS = int(os.environ.get("KIMODO_T800_RETARGET_WORKERS", "0"))
+# Multi-sample: show all humans immediately, full skin cache in a background thread.
+KIMODO_DEFER_SKIN_PRECOMPUTE = os.environ.get("KIMODO_DEFER_SKIN_PRECOMPUTE", "1").strip().lower() not in (
+    "0",
+    "false",
+    "no",
+)
+# Multi-sample T800: attach every robot after all IK jobs finish (not one-by-one as each completes).
+KIMODO_T800_SYNC_ATTACH = os.environ.get("KIMODO_T800_SYNC_ATTACH", "1").strip().lower() not in ("0", "false", "no")
+# EngineAI logos in the sky band (N/E/S/W), far from the stage — not near the robot.
+KIMODO_HORIZON_LOGO = os.environ.get("KIMODO_HORIZON_LOGO", "1").strip().lower() not in ("0", "false", "no")
+KIMODO_HORIZON_LOGO_DISTANCE = float(os.environ.get("KIMODO_HORIZON_LOGO_DISTANCE", "55"))
+# Elevation above flat ground (degrees); height = distance * tan(elev) unless HEIGHT is set.
+KIMODO_HORIZON_LOGO_ELEVATION_DEG = float(os.environ.get("KIMODO_HORIZON_LOGO_ELEVATION_DEG", "11"))
+_height_override = os.environ.get("KIMODO_HORIZON_LOGO_HEIGHT", "").strip()
+KIMODO_HORIZON_LOGO_HEIGHT = (
+    float(_height_override)
+    if _height_override
+    else KIMODO_HORIZON_LOGO_DISTANCE * math.tan(math.radians(KIMODO_HORIZON_LOGO_ELEVATION_DEG))
+)
+KIMODO_HORIZON_LOGO_SIZE = float(os.environ.get("KIMODO_HORIZON_LOGO_SIZE", "6.0"))
 
 LIGHT_THEME = dict(
     floor=(220, 220, 220),

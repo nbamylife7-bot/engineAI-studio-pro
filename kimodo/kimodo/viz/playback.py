@@ -32,6 +32,8 @@ class CharacterMotion:
         joints_pos: torch.Tensor,
         joints_rot: torch.Tensor,
         foot_contacts: Optional[torch.Tensor] = None,
+        *,
+        defer_skin_precompute: bool = False,
     ):
         self.character = character
         self.server = character.server
@@ -53,7 +55,8 @@ class CharacterMotion:
         if foot_contacts is not None:
             assert foot_contacts.shape[0] == self.length
 
-        self.precompute_mesh_info()
+        if not defer_skin_precompute:
+            self.precompute_mesh_info()
 
         # gizmos for pose editing
         self.root_translation_gizmo = None
@@ -65,6 +68,8 @@ class CharacterMotion:
         self._joint_gizmo_dragging: list[bool] = []
 
     def precompute_mesh_info(self):
+        if self.joints_pos is None or self.joints_rot is None:
+            return
         if self.character.skeleton_mesh is not None:
             print("Caching skeleton mesh info...")
             self.character.skeleton_mesh.precompute_mesh_info(self.joints_pos)
@@ -80,6 +85,8 @@ class CharacterMotion:
 
     def set_frame(self, idx: int):
         """Sets the pose of the character to the given frame index."""
+        if self.joints_pos is None or self.joints_rot is None:
+            return
         idx = min(idx, self.length - 1)  # clamp to last frame
         cur_foot_contacts = self.foot_contacts[idx] if self.foot_contacts is not None else None
         self.character.set_pose(

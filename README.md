@@ -1,97 +1,64 @@
 # EngineAI Studio Pro
 
-**engineAI-studio-pro** — Linux + **NVIDIA GPU** studio for Kimodo motion generation, NF4 text encoding, and **EngineAI T800** retargeting.
+Kimodo demo on **Linux + NVIDIA GPU**: text-to-motion generation, NF4 text encoder ([matbee/kimodo-llm2vec-nf4](https://huggingface.co/matbee/kimodo-llm2vec-nf4)), optional retargeting to the **EngineAI T800** humanoid.
 
-Text encoder: [matbee/kimodo-llm2vec-nf4](https://huggingface.co/matbee/kimodo-llm2vec-nf4) (~5 GB disk, ~5 GB VRAM).
+**Model weights are not in the repository** — download them with the scripts below after cloning.
 
-**Weights are not in this repository.** After clone: `./download_nf4.sh` and (for diffusion) `./scripts/download_kimodo_models.sh`.
-
-## Install from GitHub (zero to demo)
-
-| Step | Doc |
-|------|-----|
-| Clone → driver → conda → `./install.sh` → download models → run | **[docs/GITHUB_INSTALL.md](docs/GITHUB_INSTALL.md)** |
-| Full Linux checklist | **[docs/LINUX_FRESH_INSTALL.md](docs/LINUX_FRESH_INSTALL.md)** |
-| GPU vs CPU, WSL2, RTX 50xx | **[docs/GPU_RUNTIME.md](docs/GPU_RUNTIME.md)** |
+## Quick start
 
 ```bash
 git clone https://github.com/YOUR_GITHUB_USERNAME/engineAI-studio-pro.git
 cd engineAI-studio-pro
-sudo ./install_system_deps.sh   # once
+
+sudo ./install_system_deps.sh    # once per machine
 ./install.sh
 source ./activate_cuda.sh
 ./scripts/verify_gpu_setup.sh
 
 ./download_nf4.sh
-hf auth login                    # gated nvidia/Kimodo-* only
+hf auth login                     # only for nvidia/Kimodo-*
 ./scripts/download_kimodo_models.sh
 
-./run_demo.sh                    # http://127.0.0.1:7860
+./run_demo.sh                     # http://127.0.0.1:7860
 ```
 
-**RTX 50xx (Blackwell, sm_120):** PyTorch **nightly cu128** — [docs/GPU_RUNTIME.md](docs/GPU_RUNTIME.md).
+Full step-by-step setup, WSL2, RTX 50xx cards, and common errors — **[docs/INSTALL.md](docs/INSTALL.md)**.
 
-**12 GB VRAM:** `./run_textencoder.sh` + `./run_demo_api.sh`.
+## Hardware
 
-## Requirements
+- NVIDIA GPU, **12 GB VRAM minimum** (16 GB recommended for single-process `run_demo.sh`)
+- Ubuntu 22.04/24.04 or Debian 12, x86_64 (**WSL2** works)
+- ~40–50 GB disk (conda, PyTorch, models)
+- 16 GB RAM
 
-| | |
-|--|--|
-| GPU | NVIDIA **≥12 GB VRAM** (16+ GB for single-process `run_demo.sh`) |
-| OS | Ubuntu 22.04/24.04 or Debian 12 x86_64; **WSL2** supported |
-| Driver | `nvidia-smi` on bare metal, or WSL2 + Windows NVIDIA driver |
-| Python | 3.10 (conda env `kimodo-cuda`, set via `KIMODO_CUDA_ENV`) |
-| HF | Not required for matbee NF4; **yes** for `nvidia/Kimodo-*` diffusion |
+On **12 GB VRAM**, run encoder and demo in separate processes: `./run_textencoder.sh` and `./run_demo_api.sh` (see INSTALL.md).
 
-## Verify GPU
+## In git vs downloaded after clone
+
+| In the repository | Downloaded after clone |
+|-------------------|-------------------------|
+| `kimodo/` — Kimodo code (CUDA/NF4) | — |
+| `web-version/gmr/` — T800, robot meshes | SMPL-X body models (license) |
+| `install.sh`, `run_*.sh`, `docs/` | NF4 ~5 GB (`download_nf4.sh`) |
+| | diffusion ~1.1 GB per model (`scripts/download_kimodo_models.sh`) |
+| | conda env via `install.sh` |
+
+## More docs
+
+- [docs/INSTALL.md](docs/INSTALL.md) — main installation guide
+- [docs/GPU.md](docs/GPU.md) — GPU vs CPU, environment variables
+- [docs/MAINTAINER.md](docs/MAINTAINER.md) — publishing to GitHub
+- `.env.example` — optional environment overrides
+
+## Publish to GitHub
 
 ```bash
-source ./activate_cuda.sh
-./scripts/verify_gpu_setup.sh
+cp .env.github.example .env.github   # set GITHUB_USER and GITHUB_TOKEN
+./scripts/publish_to_github.sh
 ```
 
-## Publish / update GitHub
+Do not commit `.env.github` (it is gitignored).
 
-See [docs/PUBLISH_GITHUB.md](docs/PUBLISH_GITHUB.md) and `./scripts/publish_to_github.sh`.
+## Licenses
 
-## Environment
-
-`source ./activate_cuda.sh` sets `ENGINEAI_STUDIO_ROOT`, `HF_HOME=./cache/huggingface`, WSL `LD_LIBRARY_PATH`, NF4 paths. See `.env.example`.
-
-## Disk (full install)
-
-| | ~size |
-|--|--------|
-| NF4 | ~5 GB |
-| One Kimodo checkpoint | ~1.1 GB |
-| conda + PyTorch | 8–12 GB |
-| **Total** | **~40–50 GB** |
-
-## T800 robot
-
-1. Model **Kimodo-SMPLX-RP-v1** in the UI.
-2. **Visualize → Show T800 robot (retargeted)**.
-3. SMPL-X body models: `web-version/gmr/assets/body_models/` (not in git — download separately).
-
-```bash
-./setup_t800.sh
-./run_demo.sh
-```
-
-## Layout
-
-```
-engineAI-studio-pro/
-  docs/GITHUB_INSTALL.md
-  docs/GPU_RUNTIME.md
-  install.sh / activate_cuda.sh
-  scripts/verify_gpu_setup.sh
-  kimodo-metal-mps-support-main/
-  web-version/gmr/
-  models/          # gitignored
-  cache/           # gitignored
-```
-
-## Mac
-
-Use the main Mac Kimodo project, not this CUDA package.
+Kimodo code — Apache 2.0 (see `kimodo/LICENSE` and `LICENSE`). NVIDIA / Meta / matbee models — Hugging Face terms. SMPL-X requires separate registration on the SMPL-X website.

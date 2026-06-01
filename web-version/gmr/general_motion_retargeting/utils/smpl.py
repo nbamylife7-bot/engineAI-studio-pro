@@ -86,38 +86,53 @@ def load_smpl_file(smpl_file):
     smpl_data = np.load(smpl_file, allow_pickle=True)
     return smpl_data
 
+
+_SMPLX_BODY_MODEL_CACHE: dict = {}
+
+
+def _get_cached_smplx_body_model(model_file: str, gender: str):
+    """Reuse one SMPL-X body model per (file, gender) — skips re-loading ~150 MB per sample."""
+    key = (model_file, gender)
+    model = _SMPLX_BODY_MODEL_CACHE.get(key)
+    if model is None:
+        ext = model_file.rsplit(".", 1)[-1]
+        model = smplx.create(
+            model_file,
+            "smplx",
+            gender=gender,
+            use_pca=False,
+            ext=ext,
+        )
+        _SMPLX_BODY_MODEL_CACHE[key] = model
+    return model
+
+
 def load_smplx_file(smplx_file, smplx_body_model_path):
     smplx_data = np.load(smplx_file, allow_pickle=True)
     gender = "neutral"
     if "gender" in smplx_data.files:
         gender = str(smplx_data["gender"])
     model_file = resolve_smplx_model_file(smplx_body_model_path, gender)
-    ext = model_file.rsplit(".", 1)[-1]
-    body_model = smplx.create(
-        model_file,
-        "smplx",
-        gender=gender,
-        use_pca=False,
-        ext=ext,
-    )
+    body_model = _get_cached_smplx_body_model(model_file, gender)
 
     num_frames = smplx_data["pose_body"].shape[0]
     betas = _normalize_smplx_betas(smplx_data["betas"])
     left_hand, right_hand, jaw_pose, leye_pose, reye_pose = _smplx_optional_poses(
         smplx_data, num_frames
     )
-    smplx_output = body_model(
-        betas=torch.tensor(betas).float().view(1, -1),
-        global_orient=torch.tensor(smplx_data["root_orient"]).float(),
-        body_pose=torch.tensor(smplx_data["pose_body"]).float(),
-        transl=torch.tensor(smplx_data["trans"]).float(),
-        left_hand_pose=left_hand,
-        right_hand_pose=right_hand,
-        jaw_pose=jaw_pose,
-        leye_pose=leye_pose,
-        reye_pose=reye_pose,
-        return_full_pose=True,
-    )
+    with torch.no_grad():
+        smplx_output = body_model(
+            betas=torch.tensor(betas).float().view(1, -1),
+            global_orient=torch.tensor(smplx_data["root_orient"]).float(),
+            body_pose=torch.tensor(smplx_data["pose_body"]).float(),
+            transl=torch.tensor(smplx_data["trans"]).float(),
+            left_hand_pose=left_hand,
+            right_hand_pose=right_hand,
+            jaw_pose=jaw_pose,
+            leye_pose=leye_pose,
+            reye_pose=reye_pose,
+            return_full_pose=True,
+        )
 
     human_height = 1.66 + 0.1 * float(betas[0])
 

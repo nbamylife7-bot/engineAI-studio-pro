@@ -38,8 +38,15 @@ from .config import (
     DEMO_UI_QUICK_START_MODAL_MD,
     EXAMPLES_ROOT_DIR,
     HF_MODE,
+    KIMODO_DEFER_SKIN_PRECOMPUTE,
+    KIMODO_HORIZON_LOGO,
+    KIMODO_HORIZON_LOGO_DISTANCE,
+    KIMODO_HORIZON_LOGO_ELEVATION_DEG,
+    KIMODO_HORIZON_LOGO_HEIGHT,
+    KIMODO_HORIZON_LOGO_SIZE,
     KIMODO_T800_ENABLED,
     KIMODO_T800_HIDE_HUMAN_MESH,
+    KIMODO_T800_SYNC_ATTACH,
     DEFAULT_T800_SKIN,
     LIGHT_THEME,
     MAX_ACTIVE_USERS,
@@ -58,6 +65,9 @@ from .state import ClientSession, ModelBundle
 
 class Demo:
     def __init__(self, default_model_name: str = DEFAULT_MODEL):
+        from kimodo.device_utils import enable_fast_matmul_precision
+
+        enable_fast_matmul_precision()
         self.device = resolve_torch_device("auto")
         print(f"Using device: {self.device}")
         self.models: dict[str, ModelBundle] = {}
@@ -469,7 +479,7 @@ class Demo:
         character_name: str,
         skin: str,
     ):
-        from kimodo.viz.t800_rig import ROBOT_DISPLAY_SCALE, resolve_t800_skin_mode
+        from kimodo.viz.t800_rig import resolve_t800_skin_mode
 
         robot = session.t800_bootstrap_robot
         if robot is None:
@@ -479,9 +489,6 @@ class Demo:
         if robot.skin != resolve_t800_skin_mode(skin):
             return None
         session.t800_bootstrap_robot = None
-        # The bootstrap preview is shown at a standing-matched scale; switch to the motion scale
-        # so the generated (crouching) motion matches the human across the whole clip.
-        robot.set_display_scale(ROBOT_DISPLAY_SCALE)
         return robot
 
     def _clear_t800_bootstrap(self, session: ClientSession) -> None:
@@ -545,6 +552,31 @@ class Demo:
         )
         self.start_direction_markers[client.client_id] = origin_waypoint
 
+        if KIMODO_HORIZON_LOGO:
+            from kimodo.viz.horizon_branding import (
+                add_engineai_horizon_logos,
+                sky_height_for_distance,
+            )
+
+            logo_path = DEMO_ASSETS_ROOT / "engineai_logo.png"
+            horizon_dist = max(KIMODO_HORIZON_LOGO_DISTANCE, self.floor_len * 2.5)
+            height_override = os.environ.get("KIMODO_HORIZON_LOGO_HEIGHT", "").strip()
+            horizon_height = (
+                float(height_override)
+                if height_override
+                else sky_height_for_distance(
+                    horizon_dist,
+                    elevation_deg=KIMODO_HORIZON_LOGO_ELEVATION_DEG,
+                )
+            )
+            add_engineai_horizon_logos(
+                client,
+                logo_path,
+                distance=horizon_dist,
+                height=horizon_height,
+                logo_height_m=KIMODO_HORIZON_LOGO_SIZE,
+            )
+
     def on_client_disconnect(self, client: viser.ClientHandle) -> None:
         """Clean up when client disconnects."""
         print(f"Client {client.client_id} disconnected")
@@ -577,9 +609,34 @@ class Demo:
             return
         session = self.client_sessions[client_id]
 
-        ci = len(session.motions)
-        character_name = f"character{ci}"
-        # build character skeleton and skinning mesh
+        new_character = self._new_character_for_motion(session, client, skeleton)
+        show_skeleton = session.gui_elements.gui_viz_skeleton_checkbox.value
+        show_mesh = session.gui_elements.gui_viz_skinned_mesh_checkbox.value
+
+        # if no motion given, initialize to character default (rest) pose for one frame
+        init_joints_pos, init_joints_rot = new_character.get_pose()
+        if joints_pos is None:
+            joints_pos = init_joints_pos[None].repeat(session.max_frame_idx + 1, 1, 1)
+        if joints_rot is None:
+            joints_rot = init_joints_rot[None].repeat(session.max_frame_idx + 1, 1, 1, 1)
+
+        new_motion = CharacterMotion(new_character, joints_pos, joints_rot, foot_contacts)
+        session.motions[new_character.name] = new_motion
+
+        # put the character at the right frame
+        new_motion.set_frame(session.frame_idx)
+        new_motion.character.set_skinned_mesh_visibility(show_mesh)
+        new_motion.character.set_skeleton_visibility(show_skeleton)
+
+    def _new_character_for_motion(
+        self,
+        session: ClientSession,
+        client: viser.ClientHandle,
+        skeleton: SkeletonBase,
+        *,
+        defer_skin_precompute: bool = False,
+    ) -> Character:
+        """Create a viser character (mesh + skeleton) without registering motion."""
         if "g1" in session.model_name:
             mesh_mode = "g1_stl"
         elif "smplx" in session.model_name:
@@ -595,7 +652,9 @@ class Demo:
         show_skeleton = session.gui_elements.gui_viz_skeleton_checkbox.value
         show_mesh = session.gui_elements.gui_viz_skinned_mesh_checkbox.value
 
-        new_character = Character(
+        ci = len(session.motions)
+        character_name = f"character{ci}"
+        return Character(
             character_name,
             client,
             skeleton,
@@ -610,21 +669,91 @@ class Demo:
             gui_use_soma_layer_checkbox=session.gui_elements.gui_use_soma_layer_checkbox,
         )
 
-        # if no motion given, initialize to character default (rest) pose for one frame
-        init_joints_pos, init_joints_rot = new_character.get_pose()
-        if joints_pos is None:
-            joints_pos = init_joints_pos[None].repeat(session.max_frame_idx + 1, 1, 1)
-        if joints_rot is None:
-            joints_rot = init_joints_rot[None].repeat(session.max_frame_idx + 1, 1, 1, 1)
+    def add_character_motions_batch(
+        self,
+        client: viser.ClientHandle,
+        skeleton: SkeletonBase,
+        samples: list[tuple],
+        *,
+        spread_factor: float = 1.0,
+    ) -> None:
+        """Add several generated samples: show all at once, precompute skinning in background."""
+        client_id = client.client_id
+        if not self.client_active(client_id) or not samples:
+            return
+        session = self.client_sessions[client_id]
+        num_samples = len(samples)
+        center_idx = num_samples // 2
+        x_trans = (np.arange(num_samples) - center_idx) * spread_factor
+        defer_skin = KIMODO_DEFER_SKIN_PRECOMPUTE and num_samples > 1
 
-        new_motion = CharacterMotion(new_character, joints_pos, joints_rot, foot_contacts)
-        # save the motion in our dict
-        session.motions[character_name] = new_motion
+        show_skeleton = session.gui_elements.gui_viz_skeleton_checkbox.value
+        show_mesh = session.gui_elements.gui_viz_skinned_mesh_checkbox.value
 
-        # put the character at the right frame
-        new_motion.set_frame(session.frame_idx)
-        new_motion.character.set_skinned_mesh_visibility(show_mesh)
-        new_motion.character.set_skeleton_visibility(show_skeleton)
+        for i, sample in enumerate(samples):
+            joints_pos, joints_rot, foot_contacts = sample[0], sample[1], sample[2] if len(sample) > 2 else None
+            cur_joints_pos = joints_pos.clone() if isinstance(joints_pos, torch.Tensor) else joints_pos.copy()
+            cur_joints_pos[..., 0] += x_trans[i]
+
+            new_character = self._new_character_for_motion(session, client, skeleton)
+            init_joints_pos, init_joints_rot = new_character.get_pose()
+            if cur_joints_pos is None:
+                cur_joints_pos = init_joints_pos[None].repeat(session.max_frame_idx + 1, 1, 1)
+            if joints_rot is None:
+                joints_rot = init_joints_rot[None].repeat(session.max_frame_idx + 1, 1, 1, 1)
+
+            new_motion = CharacterMotion(
+                new_character,
+                cur_joints_pos,
+                joints_rot,
+                foot_contacts,
+                defer_skin_precompute=defer_skin,
+            )
+            session.motions[new_character.name] = new_motion
+            new_motion.set_frame(session.frame_idx)
+            new_motion.character.set_skinned_mesh_visibility(show_mesh)
+            new_motion.character.set_skeleton_visibility(show_skeleton)
+
+        if defer_skin:
+            self._schedule_skin_precompute(session)
+
+    def _schedule_skin_precompute(self, session: ClientSession) -> None:
+        """Background full-frame skin cache so multi-sample Generate does not block per character."""
+        session.skin_precompute_generation += 1
+        generation_id = session.skin_precompute_generation
+        client_id = session.client.client_id
+        frame_idx = session.frame_idx
+
+        def _worker() -> None:
+            if not self.client_active(client_id):
+                return
+            motions = list(session.motions.values())
+            print(f"Precomputing skinning for {len(motions)} character(s) in background…")
+            for motion in motions:
+                if session.skin_precompute_generation != generation_id:
+                    return
+                if not self.client_active(client_id):
+                    return
+                if motion.character.skinned_mesh is None and motion.character.skeleton_mesh is None:
+                    continue
+                try:
+                    motion.precompute_mesh_info()
+                except Exception as exc:
+                    print(f"Skin precompute failed for {motion.name}: {exc}")
+            if session.skin_precompute_generation != generation_id or not self.client_active(client_id):
+                return
+            for motion in session.motions.values():
+                try:
+                    motion.set_frame(frame_idx)
+                except Exception:
+                    pass
+            print("Skin precompute finished.")
+
+        threading.Thread(
+            target=_worker,
+            daemon=True,
+            name=f"skin-precompute-{client_id}",
+        ).start()
 
     def clear_motions(self, client_id: int) -> None:
         if not self.client_active(client_id):
@@ -633,9 +762,11 @@ class Demo:
         # Drop previous T800 playback (and standing bootstrap) before rebuilding the human clip.
         self.clear_t800_motions(client_id)
         self._clear_t800_bootstrap(session)
-        for motion in list(session.motions.values()):
-            motion.clear()
+        motions_to_clear = list(session.motions.values())
         session.motions.clear()
+        session.skin_precompute_generation += 1
+        for motion in motions_to_clear:
+            motion.clear()
         session.last_prompt_texts = None
         session.last_prompt_embeddings = None
         session.last_prompt_lengths = None
@@ -737,24 +868,235 @@ class Demo:
             return False
         return bool(session.gui_elements.gui_t800_robot_checkbox.value)
 
-    def retarget_t800_motions(self, client: viser.ClientHandle, session: ClientSession) -> None:
-        from kimodo.retarget import is_t800_available, missing_t800_dependencies, retarget_character_motion
-        from kimodo.viz.t800_rig import (
-            T800CharacterMotion,
-            T800KimodoRobot,
-            resolve_t800_skin_mode,
-        )
-
+    def retarget_t800_motions(
+        self,
+        client: viser.ClientHandle,
+        session: ClientSession,
+        *,
+        wait_for_previous: bool = False,
+    ) -> None:
+        """Run T800 retarget + viser upload off the websocket thread."""
         if not self._should_show_t800(session):
             self.clear_t800_motions(client.client_id)
             return
+
+        from kimodo.retarget import is_t800_available, missing_t800_dependencies
 
         if not is_t800_available():
             missing = ", ".join(missing_t800_dependencies())
             print(f"T800 retargeting skipped: {missing}")
             return
 
+        client_id = client.client_id
+        if wait_for_previous:
+            deadline = time.time() + 600.0
+            while session.t800_retarget_lock.locked() and time.time() < deadline:
+                time.sleep(0.05)
+        if not session.t800_retarget_lock.acquire(blocking=False):
+            print("T800 retarget already in progress, skipping duplicate request.")
+            return
+
+        def _worker() -> None:
+            try:
+                if not self.client_active(client_id):
+                    return
+                self._retarget_t800_impl(client, session)
+            except Exception as exc:
+                print(f"T800 retargeting failed: {exc}")
+                import traceback
+
+                traceback.print_exc()
+            finally:
+                session.t800_retarget_lock.release()
+
+        threading.Thread(
+            target=_worker,
+            daemon=True,
+            name=f"t800-retarget-{client_id}",
+        ).start()
+
+    def _attach_t800_for_character(
+        self,
+        client: viser.ClientHandle,
+        session: ClientSession,
+        character_name: str,
+        motion,
+        qpos_frames: list,
+        motion_fps: float,
+        *,
+        skin,
+        show_robot: bool,
+        use_textured_skin: bool,
+        textures_preloaded: bool,
+        on_progress,
+        reveal: bool = True,
+    ) -> None:
+        """Build/assign the viser T800 robot for one finished sample (main thread)."""
+        from kimodo.viz.t800_rig import (
+            T800CharacterMotion,
+            T800KimodoRobot,
+            apply_robot_display_scale,
+            compute_display_scale_for_motion,
+        )
+
+        display_scale = compute_display_scale_for_motion(motion, qpos_frames, frame_idx=session.frame_idx)
+
+        existing = session.t800_motions.get(character_name)
+        if existing is not None and existing.robot.skin == skin:
+            existing.replace_qpos_frames(qpos_frames, motion_fps=float(motion_fps))
+            apply_robot_display_scale(existing.robot, display_scale)
+            existing.set_frame(session.frame_idx)
+            existing.robot.set_visibility(show_robot and reveal)
+            return
+
+        if existing is not None:
+            existing.clear()
+            del session.t800_motions[character_name]
+
+        preloaded = self._consume_preloaded_t800_robot(session, character_name, skin)
+        if preloaded is not None:
+            apply_robot_display_scale(preloaded, display_scale)
+            preloaded.set_visibility(show_robot and reveal)
+            t800_motion = T800CharacterMotion(preloaded, qpos_frames, motion_fps=float(motion_fps))
+            t800_motion.set_frame(session.frame_idx)
+            session.t800_motions[character_name] = t800_motion
+            return
+
+        robot = T800KimodoRobot(
+            client,
+            f"/{character_name}/t800",
+            skin=skin,
+            display_scale=display_scale,
+            on_progress=on_progress if use_textured_skin and not textures_preloaded else None,
+        )
+        robot.set_visibility(show_robot and reveal)
+        t800_motion = T800CharacterMotion(robot, qpos_frames, motion_fps=float(motion_fps))
+        t800_motion.set_frame(session.frame_idx)
+        session.t800_motions[character_name] = t800_motion
+
+    def _reveal_t800_robots(self, session: ClientSession, visible: bool) -> None:
+        for t800_motion in session.t800_motions.values():
+            t800_motion.robot.set_visibility(visible)
+
+    def _flush_t800_attachments(
+        self,
+        client: viser.ClientHandle,
+        session: ClientSession,
+        pending: list[tuple],
+        **attach_kwargs,
+    ) -> None:
+        """Attach all retargeted robots, then show them together."""
+        show_robot = attach_kwargs.get("show_robot", True)
+        sync_reveal = KIMODO_T800_SYNC_ATTACH and len(pending) > 1
+        for character_name, motion, qpos_frames, motion_fps in pending:
+            if not self.client_active(client.client_id):
+                return
+            self._attach_t800_for_character(
+                client,
+                session,
+                character_name,
+                motion,
+                qpos_frames,
+                motion_fps,
+                reveal=not sync_reveal or not show_robot,
+                **attach_kwargs,
+            )
+        if sync_reveal and show_robot:
+            self._reveal_t800_robots(session, True)
+
+    def _retarget_t800_sequential(self, client, session, motions, **attach_kwargs) -> None:
+        from kimodo.retarget import retarget_character_motion
+
+        pending: list[tuple] = []
+        for character_name, motion in motions:
+            if not self.client_active(client.client_id):
+                return
+            print(f"Retargeting {character_name} to EngineAI T800 …")
+            qpos_frames, motion_fps = retarget_character_motion(
+                motion,
+                session.skeleton,
+                session.model_fps,
+                status=lambda msg: print(f"  [T800] {msg}"),
+            )
+            pending.append((character_name, motion, qpos_frames, motion_fps))
+        self._flush_t800_attachments(client, session, pending, **attach_kwargs)
+
+    def _retarget_t800_parallel(self, client, session, motions, **attach_kwargs) -> None:
+        """Retarget all samples across a CPU process pool; build each robot as it finishes."""
+        import os
+        import shutil
+        import tempfile
+        from concurrent.futures import as_completed
+
+        from kimodo.retarget.t800 import export_motion_amass_npz
+        from kimodo.retarget.t800_parallel import (
+            _worker_retarget,
+            get_retarget_pool,
+            resolve_worker_count,
+        )
+        from .config import (
+            KIMODO_T800_IK_SAFETY,
+            KIMODO_T800_IK_STRIDE,
+            KIMODO_T800_RETARGET_WORKERS,
+            KIMODO_T800_SMOOTH,
+            KIMODO_T800_SMOOTH_WINDOW,
+        )
+
+        on_progress = attach_kwargs.get("on_progress")
+        tmp_dir = tempfile.mkdtemp(prefix="kimodo_t800_par_")
+        try:
+            tasks = []
+            for character_name, motion in motions:
+                npz_path = os.path.join(tmp_dir, f"{character_name}.npz")
+                export_motion_amass_npz(motion, session.skeleton, session.model_fps, npz_path)
+                tasks.append(
+                    dict(
+                        key=character_name,
+                        npz_path=npz_path,
+                        fps=float(session.model_fps),
+                        flatten_feet=False,
+                        auto_ground=True,
+                        ik_safety_break=KIMODO_T800_IK_SAFETY,
+                        ik_stride=KIMODO_T800_IK_STRIDE,
+                        smooth=KIMODO_T800_SMOOTH,
+                        smooth_window=KIMODO_T800_SMOOTH_WINDOW,
+                        output_pkl=os.path.join(tmp_dir, f"{character_name}.t800.pkl"),
+                    )
+                )
+
+            workers = resolve_worker_count(KIMODO_T800_RETARGET_WORKERS, len(tasks))
+            if on_progress is not None:
+                on_progress(0.0, f"Retargeting {len(tasks)} samples on {workers} workers…")
+            print(f"[T800] parallel retarget: {len(tasks)} samples on {workers} workers")
+
+            pool = get_retarget_pool(workers)
+            motion_by_name = dict(motions)
+            futures = {pool.submit(_worker_retarget, task): task["key"] for task in tasks}
+
+            pending: list[tuple] = []
+            done = 0
+            for future in as_completed(futures):
+                if not self.client_active(client.client_id):
+                    break
+                character_name, qpos_frames, motion_fps = future.result()
+                motion = motion_by_name.get(character_name)
+                if motion is None or character_name not in session.motions:
+                    continue
+                pending.append((character_name, motion, qpos_frames, motion_fps))
+                done += 1
+                if on_progress is not None:
+                    on_progress(0.0, f"Retargeted {done}/{len(tasks)}…")
+            pending.sort(key=lambda item: item[0])
+            self._flush_t800_attachments(client, session, pending, **attach_kwargs)
+        finally:
+            shutil.rmtree(tmp_dir, ignore_errors=True)
+
+    def _retarget_t800_impl(self, client: viser.ClientHandle, session: ClientSession) -> None:
+        from kimodo.viz.t800_rig import resolve_t800_skin_mode
+
         self._wait_for_t800_preload(session)
+        if not self.client_active(client.client_id):
+            return
 
         for name in list(session.t800_motions.keys()):
             if name not in session.motions:
@@ -768,75 +1110,65 @@ class Demo:
         use_textured_skin = skin in ("full", "transparent")
         textures_preloaded = session.t800_bootstrap_robot is not None
         loading_notif = None
-        if use_textured_skin and not textures_preloaded:
+        try:
             loading_notif = client.add_notification(
                 title="Loading T800…",
-                body="Retargeting motion and loading textured robot mesh.",
+                body="Retargeting motion to EngineAI T800…",
                 loading=True,
                 with_close_button=False,
             )
+        except Exception:
+            loading_notif = None
 
         def on_progress(_pct: float, msg: str) -> None:
             if loading_notif is not None:
-                loading_notif.body = msg
+                try:
+                    loading_notif.body = msg
+                except Exception:
+                    pass
 
         try:
-            for character_name, motion in session.motions.items():
-                print(f"Retargeting {character_name} to EngineAI T800 …")
-                qpos_frames, _motion_fps = retarget_character_motion(
-                    motion,
-                    session.skeleton,
-                    session.model_fps,
-                    status=lambda msg: print(f"  [T800] {msg}"),
-                )
+            from kimodo.retarget.t800_parallel import resolve_worker_count
+            from .config import KIMODO_T800_RETARGET_WORKERS
 
-                existing = session.t800_motions.get(character_name)
-                if existing is not None and existing.robot.skin == skin:
-                    existing.replace_qpos_frames(qpos_frames, motion_fps=float(_motion_fps))
-                    existing.set_frame(session.frame_idx)
-                    existing.robot.set_visibility(show_robot)
-                    continue
+            motions = list(session.motions.items())
+            attach_kwargs = dict(
+                skin=skin,
+                show_robot=show_robot,
+                use_textured_skin=use_textured_skin,
+                textures_preloaded=textures_preloaded,
+                on_progress=on_progress,
+            )
+            use_parallel = (
+                len(motions) >= 2
+                and resolve_worker_count(KIMODO_T800_RETARGET_WORKERS, len(motions)) > 1
+            )
+            if use_parallel:
+                try:
+                    self._retarget_t800_parallel(client, session, motions, **attach_kwargs)
+                except Exception as exc:
+                    print(f"Parallel T800 retarget failed ({exc}); falling back to sequential.")
+                    import traceback
 
-                if existing is not None:
-                    existing.clear()
-                    del session.t800_motions[character_name]
-
-                preloaded = self._consume_preloaded_t800_robot(session, character_name, skin)
-                if preloaded is not None:
-                    preloaded.set_visibility(show_robot)
-                    t800_motion = T800CharacterMotion(
-                        preloaded,
-                        qpos_frames,
-                        motion_fps=float(_motion_fps),
-                    )
-                    t800_motion.set_frame(session.frame_idx)
-                    session.t800_motions[character_name] = t800_motion
-                    continue
-
-                if loading_notif is not None and len(session.motions) > 1:
-                    loading_notif.body = f"Loading robot mesh for {character_name}…"
-
-                robot = T800KimodoRobot(
-                    client,
-                    f"/{character_name}/t800",
-                    skin=skin,
-                    on_progress=on_progress if use_textured_skin else None,
-                )
-                robot.set_visibility(show_robot)
-                t800_motion = T800CharacterMotion(robot, qpos_frames, motion_fps=float(_motion_fps))
-                t800_motion.set_frame(session.frame_idx)
-                session.t800_motions[character_name] = t800_motion
+                    traceback.print_exc()
+                    self._retarget_t800_sequential(client, session, motions, **attach_kwargs)
+            else:
+                self._retarget_t800_sequential(client, session, motions, **attach_kwargs)
         finally:
             session.t800_quality.clear()
             session.t800_quality_errors.clear()
             if loading_notif is not None:
-                loading_notif.title = "T800 ready"
-                loading_notif.body = "Robot mesh loaded."
-                loading_notif.loading = False
-                loading_notif.with_close_button = True
-                loading_notif.auto_close_seconds = 2.0
-            self._update_t800_quality_ui(session)
-        self._sync_human_character_viz_from_gui(session)
+                try:
+                    loading_notif.title = "T800 ready"
+                    loading_notif.body = "Robot mesh loaded."
+                    loading_notif.loading = False
+                    loading_notif.with_close_button = True
+                    loading_notif.auto_close_seconds = 2.0
+                except Exception:
+                    pass
+            if self.client_active(client.client_id):
+                self._update_t800_quality_ui(session)
+                self._sync_human_character_viz_from_gui(session)
 
     def _sync_human_character_viz_from_gui(self, session: ClientSession) -> None:
         """Re-apply Show Mesh / Show Skeleton after Generate + T800 (retarget must not leave mesh hidden)."""
@@ -933,7 +1265,7 @@ class Demo:
             real_robot_rotations=real_robot_rotations,
             device=self.device,
             clear_motions=self.clear_motions,
-            add_character_motion=self.add_character_motion,
+            add_character_motions_batch=self.add_character_motions_batch,
         )
         try:
             self.retarget_t800_motions(client, session)

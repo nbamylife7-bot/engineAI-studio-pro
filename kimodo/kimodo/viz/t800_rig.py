@@ -18,10 +18,11 @@ from kimodo.retarget.gmr_bootstrap import bootstrap_gmr
 # Default AMASS export applies rot_z_180, so MuJoCo root motion uses −X where Kimodo uses +X.
 # Combine axis swap (MuJoCo +Y→Kimodo +Z, +Z→+Y) with an X flip so the robot matches the human.
 #
-# Rigid display (same pattern as ``g1_rig.py``):
-#   - bake mesh vertices once: v_kimodo = M @ v_mujoco
-#   - world position: p_k = M @ p_m
+# Rigid display (Mac-verified working path):
+#   - bake mesh vertices: v_kimodo = M @ v_mujoco, then * display_scale at handle build
+#   - world position: p_k = display_scale * (M @ p_m)
 #   - world orientation: R_k = M @ R_m @ M.T
+# Do not use pivot scaling here — it reintroduces visible FK jitter vs raw qpos.
 MUJOCO_TO_KIMODO = np.array(
     [[-1.0, 0.0, 0.0], [0.0, 0.0, 1.0], [0.0, 1.0, 0.0]],
     dtype=np.float64,
@@ -31,22 +32,15 @@ MUJOCO_TO_KIMODO_POS = MUJOCO_TO_KIMODO
 # Standing qpos: mesh forward is pelvis −X. With ``MUJOCO_TO_KIMODO``, rotate +90° so the robot faces Kimodo +Z like SMPL-X.
 BOOTSTRAP_STANDING_YAW_RAD = np.pi / 2.0
 
-# Scale the displayed robot uniformly about the floor so it matches the SMPL-X human beside it.
-# Meshes are baked UNSCALED; the scale is applied per robot instance (vertices + root position),
-# so different instances can use different scales.
-#
-# The robot crouches MORE than the human during motion (its standing pose is comparatively
-# taller), so a single scale cannot match both the straight standing preview and the crouched
-# generated motion:
-#   - ROBOT_DISPLAY_SCALE (motion): tuned so robot ≈ human across generated motion (~1.77 m mean).
-#     The fully-straight standing pose at this scale would be ~1.91 m, taller than the human.
-#   - BOOTSTRAP_DISPLAY_SCALE (first-load preview): tuned so the straight standing pose matches the
-#     human reference height (~1.77 m). On the first generation the reused bootstrap robot is
-#     switched to ROBOT_DISPLAY_SCALE via ``set_display_scale``.
-# Joint angles are scale-invariant, so the pose and exported PKL are unchanged.
+# Visual-only height match (~1.77 m): scales mesh vertices and geom positions in viser.
+# Does not change retarget qpos/PKL. Standing knee jitter is fixed at the data level by
+# temporal smoothing of qpos (see kimodo.retarget.t800.smooth_t800_qpos_frames), not here.
 T800_NATIVE_HEIGHT_M = 1.744
-ROBOT_DISPLAY_SCALE = 1.91 / T800_NATIVE_HEIGHT_M
-BOOTSTRAP_DISPLAY_SCALE = 1.77 / T800_NATIVE_HEIGHT_M
+TARGET_HUMAN_HEIGHT_M = 1.77
+DISPLAY_SCALE = TARGET_HUMAN_HEIGHT_M / T800_NATIVE_HEIGHT_M
+# Back-compat aliases used by preload / tests.
+ROBOT_DISPLAY_SCALE = DISPLAY_SCALE
+BOOTSTRAP_DISPLAY_SCALE = DISPLAY_SCALE
 
 SkinMode = Literal["white", "full", "transparent"]
 ProgressCallback = Callable[[float, str], None]
@@ -54,8 +48,8 @@ ProgressCallback = Callable[[float, str], None]
 # Opaque gray for the default ``white`` skin (viser ``add_mesh_simple``).
 T800_GRAY_RGB = (165, 168, 172)
 
-# Bump when ``MUJOCO_TO_KIMODO`` or the mesh bake (now UNSCALED) changes so stale baked meshes are not reused.
-_MESH_BAKE_VERSION = 8
+# Bump when mesh bake / display transform logic changes.
+_MESH_BAKE_VERSION = 12
 
 # Processed T800 mesh data is reused across generations (viser handles are recreated per character).
 _GLOBAL_BAKED_TRIMESH_CACHE: dict[tuple[int, int, int, str, float], object] = {}
@@ -113,6 +107,132 @@ def _bake_mesh_vertices(vertices: np.ndarray) -> np.ndarray:
 
 def _transform_position(pos_mujoco: np.ndarray) -> np.ndarray:
     return MUJOCO_TO_KIMODO @ np.asarray(pos_mujoco, dtype=np.float64)
+
+
+def _display_position_kimodo(pos_mujoco: np.ndarray, scale: float) -> np.ndarray:
+    """Kimodo world position with visual height scale (Mac: ``display_scale * pos``)."""
+    return float(scale) * _transform_position(pos_mujoco)
+
+
+def _mat_to_wxyz_mujoco(mat9: np.ndarray) -> np.ndarray:
+    bootstrap_gmr()
+    import scripts.t800_viser_robot as tvr
+
+    return tvr._mat_to_wxyz(mat9)
+
+
+def _robot_mesh_world_vertices_kimodo(model, data, *, display_scale: float) -> np.ndarray:
+    """All mesh vertices in Kimodo world space for the current FK pose."""
+    import mujoco as mj
+
+    scale = float(display_scale)
+    chunks: list[np.ndarray] = []
+    for g in range(model.ngeom):
+        if model.geom_type[g] != mj.mjtGeom.mjGEOM_MESH:
+            continue
+        mesh_id = int(model.geom_dataid[g])
+        if not _mesh_has_vertices(model, mesh_id):
+            continue
+        pos_k = _display_position_kimodo(data.geom_xpos[g], scale)
+        rot_k = _transform_wxyz(_mat_to_wxyz_mujoco(data.geom_xmat[g]))
+        rot_mat = tf.SO3(wxyz=rot_k).as_matrix()
+        vadr = int(model.mesh_vertadr[mesh_id])
+        vnum = int(model.mesh_vertnum[mesh_id])
+        verts_m = np.asarray(model.mesh_vert[vadr : vadr + vnum], dtype=np.float64)
+        verts_k = _bake_mesh_vertices(verts_m) * scale
+        chunks.append(verts_k @ rot_mat.T + pos_k)
+    if not chunks:
+        return np.zeros((0, 3), dtype=np.float64)
+    return np.concatenate(chunks, axis=0)
+
+
+def measure_robot_height_m(qpos: np.ndarray, *, display_scale: float = 1.0) -> float:
+    """Vertical extent of the T800 mesh in Kimodo coordinates."""
+    import mujoco as mj
+
+    model = load_t800_mj_model()
+    data = mj.MjData(model)
+    q = np.asarray(qpos, dtype=np.float64)
+    n = min(len(q), model.nq)
+    data.qpos[:n] = q[:n]
+    mj.mj_forward(model, data)
+    pts = _robot_mesh_world_vertices_kimodo(model, data, display_scale=float(display_scale))
+    if pts.size == 0:
+        return 0.0
+    return float(pts[:, 1].max() - pts[:, 1].min())
+
+
+def calibrate_display_scale_for_qpos(
+    qpos: np.ndarray,
+    *,
+    target_height_m: float = TARGET_HUMAN_HEIGHT_M,
+) -> float:
+    """Pick display scale so the robot matches ``target_height_m`` for this pose."""
+    base_h = measure_robot_height_m(qpos, display_scale=1.0)
+    if base_h <= 1e-6:
+        return DISPLAY_SCALE
+    return float(target_height_m / base_h)
+
+
+def estimate_motion_human_height_m(motion, frame_idx: int = 0) -> float:
+    """Human visual height from skinned mesh (falls back to skeleton joints)."""
+    idx = int(frame_idx)
+    character = getattr(motion, "character", None)
+    if character is not None:
+        skinned_verts = None
+        cache = getattr(character, "skinned_verts_cache", None)
+        if cache is not None and 0 <= idx < len(cache):
+            skinned_verts = cache[idx]
+        elif getattr(character, "skinned_mesh", None) is not None:
+            skinned_verts = character.skinned_mesh.vertices
+        if skinned_verts is not None:
+            verts = np.asarray(skinned_verts, dtype=np.float64)
+            if verts.ndim == 2 and verts.shape[0] > 0:
+                height = float(verts[:, 1].max() - verts[:, 1].min())
+                if height >= 0.5:
+                    return height
+
+    joints = np.asarray(motion.get_joints_pos(idx), dtype=np.float64)
+    if joints.ndim != 2 or joints.shape[0] == 0:
+        return TARGET_HUMAN_HEIGHT_M
+    height = float(joints[:, 1].max() - joints[:, 1].min())
+    if height < 0.5:
+        return TARGET_HUMAN_HEIGHT_M
+    return height
+
+
+def compute_display_scale_for_motion(
+    human_motion,
+    qpos_frames: list[np.ndarray],
+    *,
+    frame_idx: int = 0,
+) -> float:
+    """Pick display scale from human skinned height and robot qpos for one frame."""
+    if not qpos_frames:
+        return DISPLAY_SCALE
+    idx = min(max(int(frame_idx), 0), len(qpos_frames) - 1)
+    human_h = estimate_motion_human_height_m(human_motion, frame_idx=idx)
+    return calibrate_display_scale_for_qpos(qpos_frames[idx], target_height_m=human_h)
+
+
+def apply_robot_display_scale(robot: "T800KimodoRobot", display_scale: float) -> float:
+    """Apply scale only when it changed (avoids redundant mesh rebuilds)."""
+    scale = float(display_scale)
+    if abs(scale - robot._display_scale) > 1e-4:
+        robot.set_display_scale(scale)
+    return robot._display_scale
+
+
+def sync_robot_display_scale_to_human(
+    robot: "T800KimodoRobot",
+    human_motion,
+    qpos_frames: list[np.ndarray],
+    *,
+    frame_idx: int = 0,
+) -> float:
+    """Calibrate robot height to the human motion and apply it to ``robot``."""
+    scale = compute_display_scale_for_motion(human_motion, qpos_frames, frame_idx=frame_idx)
+    return apply_robot_display_scale(robot, scale)
 
 
 def _get_cached_baked_trimesh(model, geom_id: int, mesh_id: int, skin: SkinMode, alpha: float):
@@ -254,7 +374,7 @@ def _make_robot_scene_class(scene_prefix: str):
             skin: SkinMode = "white",
             *,
             initial_qpos=None,
-            display_scale: float = ROBOT_DISPLAY_SCALE,
+            display_scale: float = DISPLAY_SCALE,
             on_progress: Optional[ProgressCallback] = None,
         ) -> None:
             self.server = server
@@ -356,7 +476,7 @@ class T800KimodoRobot:
         scene_prefix: str,
         *,
         skin: SkinMode = "white",
-        display_scale: float = ROBOT_DISPLAY_SCALE,
+        display_scale: float = DISPLAY_SCALE,
         on_progress: Optional[ProgressCallback] = None,
     ) -> None:
         bootstrap_gmr()
@@ -391,10 +511,14 @@ class T800KimodoRobot:
             self._display_scale = float(display_scale)
             self._inner.display_scale = self._display_scale
             last_qpos = self._last_applied_qpos
-            for _, handle in self._inner.geom_handles:
-                self.server.scene.remove_by_name(handle.name)
-            self._inner.geom_handles.clear()
-            self._inner._build_meshes()
+            try:
+                for _, handle in self._inner.geom_handles:
+                    self.server.scene.remove_by_name(handle.name)
+                self._inner.geom_handles.clear()
+                self._inner._build_meshes()
+            except Exception as exc:
+                print(f"T800 display scale update failed: {exc}")
+                return
             self._last_applied_qpos = None
             if last_qpos is not None:
                 self._apply_pose_from_qpos(last_qpos)
@@ -426,6 +550,10 @@ class T800KimodoRobot:
             self._inner.geom_handles.clear()
             self._last_applied_qpos = None
 
+    def reset_display_state(self) -> None:
+        """Reset cached display state (e.g. after a new clip is loaded)."""
+        self._last_applied_qpos = None
+
     def disable_bootstrap_yaw(self) -> None:
         self._bootstrap_yaw_rad = 0.0
 
@@ -436,8 +564,10 @@ class T800KimodoRobot:
         self._inner.update_from_qpos(q)
         yaw = float(self._bootstrap_yaw_rad)
         data = self._inner.data
+        model = self._inner.model
+        scale = float(self._display_scale)
         for g, handle in self._inner.geom_handles:
-            pos_k = self._display_scale * _transform_position(data.geom_xpos[g])
+            pos_k = _display_position_kimodo(data.geom_xpos[g], scale)
             wxyz_k = _transform_wxyz(tvr._mat_to_wxyz(data.geom_xmat[g]))
             if yaw != 0.0:
                 pos_k, wxyz_k = _apply_kimodo_yaw(pos_k, wxyz_k, yaw)
@@ -450,9 +580,6 @@ class T800KimodoRobot:
         with self._update_lock:
             if not self._inner.geom_handles:
                 return
-            if self._last_applied_qpos is not None and self._last_applied_qpos.shape == q.shape:
-                if np.allclose(q, self._last_applied_qpos, rtol=0.0, atol=0.0):
-                    return
             self._apply_pose_from_qpos(q)
             self._last_applied_qpos = q.copy()
 
@@ -478,7 +605,7 @@ class T800CharacterMotion:
         self.motion_fps = float(motion_fps)
         self.length = len(qpos_frames)
         self._last_frame_idx = -1
-        self.robot._last_applied_qpos = None
+        self.robot.reset_display_state()
 
     def set_frame(self, frame_idx: int) -> None:
         if not self.qpos_frames:

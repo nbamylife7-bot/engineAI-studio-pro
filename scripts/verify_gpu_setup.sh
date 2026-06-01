@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Проверка: CUDA, PyTorch на GPU, bitsandbytes, Kimodo, motion_correction, T800 deps.
-# Запуск: source ./activate_cuda.sh && ./scripts/verify_gpu_setup.sh
+# Check CUDA, PyTorch GPU, bitsandbytes, Kimodo, motion_correction, T800 deps.
+# Run: source ./activate_cuda.sh && ./scripts/verify_gpu_setup.sh
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -13,7 +13,7 @@ warn() { echo "  WARN $*"; }
 bad() { echo "  FAIL $*"; FAIL=1; }
 note() { echo "  NOTE $*"; }
 
-echo "=== EngineAI Studio Pro — проверка GPU ==="
+echo "=== EngineAI Studio Pro — GPU check ==="
 echo "Python: $(python -V 2>&1)"
 echo "LD_LIBRARY_PATH (WSL): ${LD_LIBRARY_PATH:-<unset>}"
 echo ""
@@ -23,9 +23,9 @@ if command -v nvidia-smi >/dev/null 2>&1; then
   nvidia-smi --query-gpu=name,driver_version,memory.total --format=csv,noheader | head -1 | ok
 else
   if [[ -d /usr/lib/wsl/lib ]] && [[ -f /usr/lib/wsl/lib/libcuda.so.1 ]]; then
-    note "nvidia-smi нет в WSL, но libcuda в /usr/lib/wsl/lib (драйвер Windows) — нормально для WSL2"
+    note "no nvidia-smi in WSL, but libcuda in /usr/lib/wsl/lib (Windows driver) — OK for WSL2"
   else
-    bad "nvidia-smi не найден и нет WSL libcuda — установите драйвер NVIDIA"
+    bad "nvidia-smi missing and no WSL libcuda — install NVIDIA driver"
   fi
 fi
 
@@ -51,7 +51,7 @@ except Exception as e:
     sys.exit(1)
 # Blackwell RTX 50xx needs recent PyTorch (cu128 nightly)
 if cap[0] >= 12 and "cu128" not in torch.__version__ and "+cu12" in torch.__version__:
-    print("  WARN RTX 50xx (sm_120): нужен PyTorch nightly cu128, см. docs/GPU_RUNTIME.md")
+    print("  WARN RTX 50xx (sm_120): use PyTorch nightly cu128, see docs/GPU.md")
 PY
 [[ $? -eq 0 ]] || FAIL=1
 
@@ -61,7 +61,7 @@ python -c "import bitsandbytes as bnb; print('  OK   bitsandbytes', bnb.__versio
 
 echo ""
 echo "=== 4. Kimodo + motion_correction ==="
-python <<'PY'
+(cd "${KIMODO_REPO}" && python <<'PY')
 import sys
 try:
     import kimodo
@@ -74,7 +74,7 @@ try:
     print("  OK   motion_correction (C++ postprocess)")
 except ImportError as e:
     print(f"  FAIL motion_correction: {e}")
-    print("       sudo apt install libsimde-dev && pip install -e kimodo-metal-mps-support-main --no-deps --no-build-isolation")
+    print("       sudo apt install libsimde-dev && pip install -e kimodo --no-deps --no-build-isolation")
     sys.exit(1)
 from kimodo.retarget import is_t800_available, missing_t800_dependencies
 if is_t800_available():
@@ -86,7 +86,7 @@ PY
 
 echo ""
 echo "=== 5. Text encoder device (NF4 = GPU only) ==="
-python <<'PY'
+(cd "${KIMODO_REPO}" && python <<'PY')
 import os
 import torch
 from kimodo.device_utils import resolve_text_encoder_device
@@ -117,8 +117,8 @@ fi
 
 echo ""
 if [[ "${FAIL}" -eq 0 ]]; then
-  echo "=== GPU runtime OK (модели — см. секцию 6) ==="
+  echo "=== GPU runtime OK (models — see section 6) ==="
 else
-  echo "=== Критические ошибки — см. docs/LINUX_FRESH_INSTALL.md ==="
+  echo "=== Critical errors — see docs/INSTALL.md ==="
   exit 1
 fi

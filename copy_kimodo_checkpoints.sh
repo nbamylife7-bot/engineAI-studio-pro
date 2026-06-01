@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Копирует уже скачанные Kimodo diffusion из ~/.cache/huggingface/hub
-# в engineAI-studio-pro/cache/huggingface/hub (для переноса на Linux-сервер).
+# Copy downloaded Kimodo diffusion from ~/.cache/huggingface/hub
+# into engineAI-studio-pro/cache/huggingface/hub (e.g. when moving to a Linux server).
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

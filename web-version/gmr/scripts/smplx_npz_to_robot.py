@@ -71,6 +71,52 @@ def resolve_smplx_body_models_path() -> pathlib.Path:
     )
 
 
+def resolve_kimodo_t800_ik_safety_break() -> bool:
+    """Kimodo T800 retarget: True avoids standing IK ping-pong (GMR default); False was legacy Kimodo."""
+    return os.environ.get("KIMODO_T800_IK_SAFETY", "1").strip().lower() not in ("0", "false", "no")
+
+
+def _quat_slerp(q0: np.ndarray, q1: np.ndarray, t: float) -> np.ndarray:
+    """Spherical interpolation of wxyz quaternions (numpy, single pair)."""
+    q0 = np.asarray(q0, dtype=np.float64)
+    q1 = np.asarray(q1, dtype=np.float64)
+    dot = float(np.dot(q0, q1))
+    if dot < 0.0:
+        q1 = -q1
+        dot = -dot
+    if dot > 0.9995:
+        out = q0 + t * (q1 - q0)
+        n = np.linalg.norm(out)
+        return out / n if n > 1e-8 else q0
+    theta0 = np.arccos(np.clip(dot, -1.0, 1.0))
+    sin0 = np.sin(theta0)
+    s0 = np.sin((1.0 - t) * theta0) / sin0
+    s1 = np.sin(t * theta0) / sin0
+    return s0 * q0 + s1 * q1
+
+
+def _interpolate_qpos_frames(key_idx: list[int], key_qpos: list[np.ndarray], n_frames: int) -> list[np.ndarray]:
+    """Upsample sparsely-solved qpos (root pos lerp, root quat slerp, joints lerp) to ``n_frames``."""
+    if len(key_idx) <= 1 or key_idx[-1] <= 0:
+        return [key_qpos[0].copy() for _ in range(n_frames)]
+    out: list[np.ndarray] = []
+    seg = 0
+    for f in range(n_frames):
+        while seg < len(key_idx) - 2 and key_idx[seg + 1] <= f:
+            seg += 1
+        i0, i1 = key_idx[seg], key_idx[seg + 1]
+        q0, q1 = key_qpos[seg], key_qpos[seg + 1]
+        t = 0.0 if i1 == i0 else float(np.clip((f - i0) / (i1 - i0), 0.0, 1.0))
+        q = q0.copy()
+        q[:3] = (1.0 - t) * q0[:3] + t * q1[:3]
+        if q.size >= 7:
+            q[3:7] = _quat_slerp(q0[3:7], q1[3:7], t)
+        if q.size > 7:
+            q[7:] = (1.0 - t) * q0[7:] + t * q1[7:]
+        out.append(q)
+    return out
+
+
 def convert_smplx_amass_npz(
     npz_path: str,
     *,
@@ -79,6 +125,8 @@ def convert_smplx_amass_npz(
     auto_ground: bool = True,
     flatten_feet: bool = False,
     robot: str = "t800",
+    ik_safety_break: bool | None = None,
+    ik_stride: int = 1,
     output_path: pathlib.Path,
     status: Callable[[str], None] = lambda _msg: None,
 ) -> tuple[list[np.ndarray], int]:
@@ -114,11 +162,16 @@ def convert_smplx_amass_npz(
         raise RuntimeError("No frames after SMPL-X forward kinematics / FPS alignment.")
 
     height = float(human_height) if human_height > 0 else float(detected_height)
+    use_ik_safety = (
+        resolve_kimodo_t800_ik_safety_break()
+        if ik_safety_break is None
+        else bool(ik_safety_break)
+    )
     retargeter = GMR(
         actual_human_height=height,
         src_human="smplx",
         tgt_robot=robot,
-        ik_safety_break=False,
+        ik_safety_break=use_ik_safety,
         verbose=False,
     )
 
@@ -126,12 +179,27 @@ def convert_smplx_amass_npz(
         ground = bvr.estimate_ground_offset(retargeter, human_frames)
         retargeter.set_ground_offset(ground)
 
-    qpos_frames: list[np.ndarray] = []
-    for i, frame in enumerate(human_frames):
-        qpos = retargeter.retarget(frame, frame_index=i)
-        if flatten_feet:
-            qpos = foot_pp.postprocess_robot_qpos_feet(retargeter.model, qpos, flatten=True)
-        qpos_frames.append(qpos.copy())
+    n_frames = len(human_frames)
+    stride = max(1, int(ik_stride))
+    if stride > 1 and n_frames > 2 * stride:
+        # Solve IK on every stride-th frame, then interpolate qpos to full length.
+        key_idx = list(range(0, n_frames, stride))
+        if key_idx[-1] != n_frames - 1:
+            key_idx.append(n_frames - 1)
+        key_qpos: list[np.ndarray] = []
+        for i in key_idx:
+            qpos = retargeter.retarget(human_frames[i], frame_index=i)
+            if flatten_feet:
+                qpos = foot_pp.postprocess_robot_qpos_feet(retargeter.model, qpos, flatten=True)
+            key_qpos.append(qpos.copy())
+        qpos_frames = _interpolate_qpos_frames(key_idx, key_qpos, n_frames)
+    else:
+        qpos_frames = []
+        for i, frame in enumerate(human_frames):
+            qpos = retargeter.retarget(frame, frame_index=i)
+            if flatten_feet:
+                qpos = foot_pp.postprocess_robot_qpos_feet(retargeter.model, qpos, flatten=True)
+            qpos_frames.append(qpos.copy())
 
     motion_fps = int(round(aligned_fps)) if aligned_fps else int(tgt_fps)
     motion = fr._build_motion_data_from_qpos_list(qpos_frames, motion_fps)

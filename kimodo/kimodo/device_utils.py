@@ -120,6 +120,35 @@ def resolve_skin_compute_device(skeleton_device: Union[str, torch.device], torch
     return torch.device(skeleton_device)
 
 
+_FAST_MATMUL_ENABLED = False
+
+
+def enable_fast_matmul_precision(torch_mod=torch) -> None:
+    """Enable TF32 / high matmul precision on NVIDIA GPUs (Ampere+ / Blackwell sm_120).
+
+    RTX 50xx (Blackwell) has fast TF32 and BF16 tensor cores. ``set_float32_matmul_precision('high')``
+    lets PyTorch use TF32 for fp32 matmuls and ``allow_tf32`` covers cuBLAS/cuDNN. Idempotent and a
+    no-op off CUDA. Disable with ``KIMODO_FAST_MATMUL=0``.
+    """
+    global _FAST_MATMUL_ENABLED
+    if _FAST_MATMUL_ENABLED:
+        return
+    if os.environ.get("KIMODO_FAST_MATMUL", "1").strip().lower() in ("0", "false", "no"):
+        return
+    if not torch_cuda_available(torch_mod):
+        return
+    try:
+        torch_mod.set_float32_matmul_precision("high")
+        torch_mod.backends.cuda.matmul.allow_tf32 = True
+        torch_mod.backends.cudnn.allow_tf32 = True
+        torch_mod.backends.cudnn.benchmark = True
+    except Exception as exc:  # pragma: no cover - defensive on exotic builds
+        print(f"[perf] Could not enable TF32 fast matmul: {exc}")
+        return
+    _FAST_MATMUL_ENABLED = True
+    print("[perf] TF32 fast matmul enabled (float32_matmul_precision=high, allow_tf32).")
+
+
 def release_device_memory(device: Optional[Union[str, torch.device]] = None) -> None:
     """Return cached accelerator memory after heavy inference or viz precompute."""
     import gc

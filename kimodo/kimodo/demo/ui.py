@@ -2903,27 +2903,53 @@ def create_gui(
                     # add mesh selector to choose character to commit
                     def commit_motion(event: viser.GuiEvent) -> None:
                         target = event.target
-                        commit_name = target.name.split("/")[1]  # e.g. /character0/simple_skinned
+                        name_parts = [p for p in target.name.split("/") if p]
+                        commit_name = name_parts[0] if name_parts else ""
                         print(f"Committing motion for character: {commit_name}")
-                        # delete non-selected motions
+                        session.playing = False
+
                         new_motion_kwargs = None
-                        for character_name, motion in session.motions.items():
-                            if character_name == commit_name:
-                                new_motion_kwargs = {
-                                    "skeleton": session.skeleton,
-                                    "joints_rot": motion.joints_rot,
-                                    "foot_contacts": motion.foot_contacts,
-                                }
-                                root_x_offset = motion.joints_pos[0, session.skeleton.root_idx, 0]
-                                new_joints_pos = motion.joints_pos.clone()
-                                new_joints_pos[..., 0] -= root_x_offset
-                                new_motion_kwargs["joints_pos"] = new_joints_pos
-                                break
-                        # clear and re-add the selected motion
+                        for character_name, motion in list(session.motions.items()):
+                            if character_name != commit_name:
+                                continue
+                            if motion.joints_pos is None or motion.joints_rot is None:
+                                print(f"Sample {commit_name} is not ready yet (still loading).")
+                                return
+                            root_x_offset = motion.joints_pos[0, session.skeleton.root_idx, 0]
+                            new_joints_pos = motion.joints_pos.clone()
+                            new_joints_pos[..., 0] -= root_x_offset
+                            new_motion_kwargs = {
+                                "skeleton": session.skeleton,
+                                "joints_pos": new_joints_pos,
+                                "joints_rot": motion.joints_rot.clone(),
+                                "foot_contacts": (
+                                    motion.foot_contacts.clone()
+                                    if motion.foot_contacts is not None
+                                    else None
+                                ),
+                            }
+                            break
+
+                        if new_motion_kwargs is None:
+                            print(f"Unknown sample: {commit_name}")
+                            return
+
+                        for motion in session.motions.values():
+                            if motion.character.skinned_mesh is not None:
+                                motion.character.skinned_mesh.remove_click_callback("all")
+                            elif motion.character.g1_mesh_rig is not None:
+                                for handle in motion.character.g1_mesh_rig.mesh_handles:
+                                    handle.remove_click_callback("all")
+
                         demo.clear_motions(event_client.client_id)
                         demo.add_character_motion(event_client, **new_motion_kwargs)
+                        demo.set_frame(event_client.client_id, session.frame_idx)
                         try:
-                            demo.retarget_t800_motions(event_client, session)
+                            demo.retarget_t800_motions(
+                                event_client,
+                                session,
+                                wait_for_previous=True,
+                            )
                         except Exception as exc:
                             print(f"T800 retargeting failed: {exc}")
                         gui_edit_constraint_button.disabled = False

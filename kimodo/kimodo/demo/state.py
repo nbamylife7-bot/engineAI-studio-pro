@@ -64,3 +64,5 @@ class ClientSession:
     t800_bootstrap_robot: object | None = None
     t800_preload_done: threading.Event = field(default_factory=threading.Event)
     t800_preload_in_progress: bool = False
+    t800_retarget_lock: threading.Lock = field(default_factory=threading.Lock)
+    skin_precompute_generation: int = 0

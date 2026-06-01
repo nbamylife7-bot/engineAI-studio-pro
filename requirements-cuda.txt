@@ -1,5 +1,5 @@
 # Python-зависимости для NVIDIA (после: pip install torch ... --index-url cu124)
-# Полный список системных пакетов — docs/LINUX_FRESH_INSTALL.md
+# Системные пакеты: sudo ./install_system_deps.sh — см. docs/INSTALL.md
 
 # NF4 text encoder (matbee/kimodo-llm2vec-nf4)
 bitsandbytes>=0.43.0

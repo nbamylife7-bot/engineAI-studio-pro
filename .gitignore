@@ -1,19 +1,43 @@
+# Secrets and local env
 .env
 .env.github
+
+# Python / build
 .venv/
-web-version/gmr/assets/body_models/
-kimodo-metal-mps-support-main/SMPLX_NEUTRAL_2020.npz
+__pycache__/
+*.pyc
+*.egg-info/
+**/*.egg-info/
+.pytest_cache/
+.mypy_cache/
+
+# Models and caches (download after clone)
 cache/
 models/
-__pycache__/
-*.egg-info/
-.smoke_logs/
-kimodo-metal-mps-support-main/.venv/
-kimodo-metal-mps-support-main/**/build/
-kimodo-metal-mps-support-main/MotionCorrection/build_test/
+
+# SMPL-X weights (license — user downloads separately)
+web-version/gmr/assets/body_models/
+
+# Large / local-only Kimodo files
+kimodo/SMPLX_NEUTRAL_2020.npz
+kimodo/assets/*.gif
+kimodo/.venv/
+kimodo/**/build/
+kimodo/MotionCorrection/build_test/
+
+# Optional vendored SIMDe (use apt libsimde-dev instead)
 vendor/simde/
-*.pyc
+
+# Symlink after rename kimodo-metal-mps-support-main → kimodo
+kimodo-metal-mps-support-main
+
+# OS junk
 .DS_Store
 ._*
 **/._*
 **/.DS_Store
+Thumbs.db
+
+# Logs
+.smoke_logs/
+*.log

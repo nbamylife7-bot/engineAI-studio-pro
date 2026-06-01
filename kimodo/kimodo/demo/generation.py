@@ -147,7 +147,7 @@ def generate(
     real_robot_rotations: bool = False,
     device: str,
     clear_motions,
-    add_character_motion,
+    add_character_motions_batch,
 ) -> None:
     client_id = client.client_id
     print(
@@ -204,20 +204,11 @@ def generate(
     # Display on characters (callbacks keep this module UI-agnostic).
     clear_motions(client_id)
     release_device_memory(device)
-    # Keep one sample centered at the origin so constraints align.
-    spread_factor = 1.0  # meters
-    center_idx = num_samples // 2
-    x_trans = (np.arange(num_samples) - center_idx) * spread_factor
+    samples = []
     for i in range(num_samples):
-        cur_joints_pos = joints_pos[i]
-        cur_joints_pos[..., 0] += x_trans[i]
-        add_character_motion(
-            client,
-            session.skeleton,
-            cur_joints_pos,
-            joints_rot[i],
-            foot_contacts[i],
-        )
+        fc = foot_contacts[i] if foot_contacts is not None else None
+        samples.append((joints_pos[i], joints_rot[i], fc))
+    add_character_motions_batch(client, session.skeleton, samples)
 
     session.last_prompt_texts = None
     session.last_prompt_embeddings = None
