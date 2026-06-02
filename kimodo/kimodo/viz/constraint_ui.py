@@ -461,8 +461,10 @@ class EEJointsKeyframeSet(ConstraintSet):
 
         constrained_idx = [self.skeleton.root_idx] + ee_joint_indices
 
-        constrained_idx = np.array(constrained_idx)
-        constrained_bone_idx = np.array(constrained_bone_idx)
+        # Force integer dtype: a single-joint end-effector leaves bone indices empty, and
+        # ``np.array([])`` defaults to float64 — numpy rejects that as a fancy index.
+        constrained_idx = np.array(constrained_idx, dtype=np.int64)
+        constrained_bone_idx = np.array(constrained_bone_idx, dtype=np.int64)
 
         # create skeleton to visualize the full-body constraint
         joint_color = np.full((self.skeleton.nbjoints, 3), (220, 220, 220))

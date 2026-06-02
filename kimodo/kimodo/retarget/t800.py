@@ -132,6 +132,52 @@ def retarget_npz_to_qpos(
     return qpos_frames, motion_fps
 
 
+def prepare_t800_human_frames(npz_path: str, fps: float) -> dict:
+    """Torch SMPL-X FK in the main process → picklable payload for worker IK (option A)."""
+    bootstrap_gmr()
+    from scripts.smplx_npz_to_robot import prepare_smplx_human_frames
+
+    return prepare_smplx_human_frames(str(npz_path), tgt_fps=max(1, int(round(fps))))
+
+
+def retarget_prepared_to_qpos(
+    payload: dict,
+    fps: float,
+    *,
+    flatten_feet: bool = False,
+    auto_ground: bool = True,
+    ik_safety_break: bool = True,
+    ik_stride: int = 1,
+    smooth: bool = True,
+    smooth_window: int = 13,
+    output_pkl: str | None = None,
+    status: Callable[[str], None] | None = None,
+) -> tuple[list[np.ndarray], int]:
+    """Pure-CPU IK from prepared SMPL-X frames (no torch). Runs in a worker process."""
+    bootstrap_gmr()
+    from scripts.smplx_npz_to_robot import retarget_human_frames
+
+    status_fn = status or (lambda _msg: None)
+    out_pkl = Path(output_pkl) if output_pkl else None
+    qpos_frames, motion_fps = retarget_human_frames(
+        payload["human_frames"],
+        aligned_fps=payload["aligned_fps"],
+        tgt_fps=payload.get("tgt_fps", max(1, int(round(fps)))),
+        height=payload["height"],
+        auto_ground=auto_ground,
+        flatten_feet=flatten_feet,
+        robot="t800",
+        ik_safety_break=ik_safety_break,
+        ik_stride=ik_stride,
+        output_path=out_pkl,
+        status=status_fn,
+    )
+    if smooth and qpos_frames:
+        status_fn("Smoothing standing IK jitter …")
+        qpos_frames = smooth_t800_qpos_frames(qpos_frames, window=smooth_window)
+    return qpos_frames, motion_fps
+
+
 def retarget_character_motion(
     motion,
     skeleton: SkeletonBase,

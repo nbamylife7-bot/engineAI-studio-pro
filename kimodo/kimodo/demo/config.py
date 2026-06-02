@@ -82,6 +82,24 @@ KIMODO_HORIZON_LOGO_HEIGHT = (
 )
 KIMODO_HORIZON_LOGO_SIZE = float(os.environ.get("KIMODO_HORIZON_LOGO_SIZE", "6.0"))
 
+# Optional GEM-SMPL (GENMO) video → AMASS import (separate Python env under KIMODO_GEM_ROOT).
+KIMODO_GEM_ENABLED = os.environ.get("KIMODO_GEM", "1").strip().lower() not in ("0", "false", "no")
+KIMODO_GEM_ROOT = os.environ.get("KIMODO_GEM_ROOT", "").strip()
+KIMODO_GEM_PYTHON = os.environ.get("KIMODO_GEM_PYTHON", "").strip()
+KIMODO_GEM_CKPT = os.environ.get("KIMODO_GEM_CKPT", "").strip()
+KIMODO_GEM_STATIC_CAM = os.environ.get("KIMODO_GEM_STATIC_CAM", "1").strip().lower() not in (
+    "0",
+    "false",
+    "no",
+)
+KIMODO_GEM_TIMEOUT_SEC = float(os.environ.get("KIMODO_GEM_TIMEOUT_SEC", "1800"))
+KIMODO_GEM_DEMO_MODEL = os.environ.get("KIMODO_GEM_DEMO_MODEL", "Kimodo-SMPLX-RP-v1").strip()
+KIMODO_GEM_DETECTOR = os.environ.get("KIMODO_GEM_DETECTOR", "yolov8").strip().lower()
+try:
+    KIMODO_GEM_YOLOX_PERIOD = max(1, int(os.environ.get("KIMODO_GEM_YOLOX_PERIOD", "1")))
+except ValueError:
+    KIMODO_GEM_YOLOX_PERIOD = 1
+
 LIGHT_THEME = dict(
     floor=(220, 220, 220),
     grid=(180, 180, 180),

@@ -117,19 +117,18 @@ def _interpolate_qpos_frames(key_idx: list[int], key_qpos: list[np.ndarray], n_f
     return out
 
 
-def convert_smplx_amass_npz(
+def prepare_smplx_human_frames(
     npz_path: str,
     *,
     tgt_fps: int = 30,
     human_height: float = 0.0,
-    auto_ground: bool = True,
-    flatten_feet: bool = False,
-    robot: str = "t800",
-    ik_safety_break: bool | None = None,
-    ik_stride: int = 1,
-    output_path: pathlib.Path,
     status: Callable[[str], None] = lambda _msg: None,
-) -> tuple[list[np.ndarray], int]:
+) -> dict:
+    """SMPL-X forward kinematics (torch) → picklable per-frame body transforms.
+
+    This is the only torch step. Run it in the main process so worker processes need no torch /
+    SMPL-X model: they consume the returned ``human_frames`` (plain numpy) and only solve IK.
+    """
     kind = detect_npz_kind(npz_path)
     if kind == "kimodo_native":
         raise RuntimeError(
@@ -162,6 +161,31 @@ def convert_smplx_amass_npz(
         raise RuntimeError("No frames after SMPL-X forward kinematics / FPS alignment.")
 
     height = float(human_height) if human_height > 0 else float(detected_height)
+    return {
+        "human_frames": human_frames,
+        "aligned_fps": aligned_fps,
+        "height": height,
+        "tgt_fps": int(tgt_fps),
+        "src_fps": float(src_fps),
+        "num_frames": num_frames,
+    }
+
+
+def retarget_human_frames(
+    human_frames: list,
+    *,
+    aligned_fps: float,
+    tgt_fps: int = 30,
+    height: float,
+    auto_ground: bool = True,
+    flatten_feet: bool = False,
+    robot: str = "t800",
+    ik_safety_break: bool | None = None,
+    ik_stride: int = 1,
+    output_path: pathlib.Path | None = None,
+    status: Callable[[str], None] = lambda _msg: None,
+) -> tuple[list[np.ndarray], int]:
+    """Pure-CPU IK: prepared SMPL-X body transforms → T800 qpos. Safe to run in a worker (no torch)."""
     use_ik_safety = (
         resolve_kimodo_t800_ik_safety_break()
         if ik_safety_break is None
@@ -182,7 +206,6 @@ def convert_smplx_amass_npz(
     n_frames = len(human_frames)
     stride = max(1, int(ik_stride))
     if stride > 1 and n_frames > 2 * stride:
-        # Solve IK on every stride-th frame, then interpolate qpos to full length.
         key_idx = list(range(0, n_frames, stride))
         if key_idx[-1] != n_frames - 1:
             key_idx.append(n_frames - 1)
@@ -202,9 +225,41 @@ def convert_smplx_amass_npz(
             qpos_frames.append(qpos.copy())
 
     motion_fps = int(round(aligned_fps)) if aligned_fps else int(tgt_fps)
-    motion = fr._build_motion_data_from_qpos_list(qpos_frames, motion_fps)
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    with open(output_path, "wb") as fh:
-        pickle.dump(motion, fh)
-    status(f"Saved {output_path.name} ({len(qpos_frames)} frames @ {motion_fps} fps).")
+    if output_path is not None:
+        motion = fr._build_motion_data_from_qpos_list(qpos_frames, motion_fps)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        with open(output_path, "wb") as fh:
+            pickle.dump(motion, fh)
+        status(f"Saved {output_path.name} ({len(qpos_frames)} frames @ {motion_fps} fps).")
     return qpos_frames, motion_fps
+
+
+def convert_smplx_amass_npz(
+    npz_path: str,
+    *,
+    tgt_fps: int = 30,
+    human_height: float = 0.0,
+    auto_ground: bool = True,
+    flatten_feet: bool = False,
+    robot: str = "t800",
+    ik_safety_break: bool | None = None,
+    ik_stride: int = 1,
+    output_path: pathlib.Path,
+    status: Callable[[str], None] = lambda _msg: None,
+) -> tuple[list[np.ndarray], int]:
+    payload = prepare_smplx_human_frames(
+        npz_path, tgt_fps=int(tgt_fps), human_height=human_height, status=status
+    )
+    return retarget_human_frames(
+        payload["human_frames"],
+        aligned_fps=payload["aligned_fps"],
+        tgt_fps=payload["tgt_fps"],
+        height=payload["height"],
+        auto_ground=auto_ground,
+        flatten_feet=flatten_feet,
+        robot=robot,
+        ik_safety_break=ik_safety_break,
+        ik_stride=ik_stride,
+        output_path=output_path,
+        status=status,
+    )

@@ -771,6 +771,39 @@ def create_gui(
                     "Load Motion",
                     hint="Load the selected motion",
                 )
+            with client.gui.add_folder("Video (GEM)", expand_by_default=False):
+                from kimodo.imports.gem import gem_video_readiness_error, is_gem_video_ready
+
+                from .config import KIMODO_GEM_DETECTOR, KIMODO_GEM_ENABLED, KIMODO_GEM_STATIC_CAM
+
+                _gem_ok = KIMODO_GEM_ENABLED and is_gem_video_ready()
+                _gem_det_init = "yolox" if KIMODO_GEM_DETECTOR == "yolox" else "yolov8"
+                gui_gem_video_path_text = client.gui.add_text(
+                    "Video Path",
+                    initial_value="/path/to/video.mp4",
+                    disabled=not _gem_ok,
+                )
+                gui_gem_detector_dropdown = client.gui.add_dropdown(
+                    "Person detector",
+                    options=("yolov8", "yolox"),
+                    initial_value=_gem_det_init,
+                    disabled=not _gem_ok,
+                    hint="yolov8 = YOLOv8x. yolox = YOLOX+ByteTrack (needs onnxruntime in GENMO venv).",
+                )
+                gui_gem_static_cam_checkbox = client.gui.add_checkbox(
+                    "Static camera",
+                    initial_value=KIMODO_GEM_STATIC_CAM,
+                    disabled=not _gem_ok,
+                    hint="Tripod / fixed camera. Off only changes GEM mask (SLAM not in demo_smpl_hpe).",
+                )
+                gui_gem_import_button = client.gui.add_button(
+                    "Import from Video",
+                    disabled=not _gem_ok,
+                    hint="GEM-SMPL (GENMO): video → SMPL-X motion → T800 retarget. Requires scripts/install_gem.sh.",
+                )
+                if not _gem_ok:
+                    _gem_err = gem_video_readiness_error() or "GEM not ready."
+                    client.gui.add_markdown(f"**GEM not ready** — {_gem_err}")
             with client.gui.add_folder("Constraints", expand_by_default=False):
                 gui_save_constraints_path_text = client.gui.add_text(
                     "Save Path", initial_value="output_constraints.json"
@@ -875,27 +908,41 @@ def create_gui(
                 session = demo.client_sessions[client.client_id]
 
                 # Load the NPZ file
-                data = np.load(load_path)
+                data = np.load(load_path, allow_pickle=True)
 
-                # Extract motion data - handle different possible key names
-                if "joints_pos" in data:
-                    joints_pos = tensor_from_numpy_on_device(data["joints_pos"], demo.device)
-                elif "posed_joints" in data:
-                    joints_pos = tensor_from_numpy_on_device(data["posed_joints"], demo.device)
+                # AMASS SMPL-X (Kimodo export / GEM video import)
+                if all(k in data.files for k in ("pose_body", "root_orient", "trans")):
+                    from kimodo.imports.gem import amass_npz_to_kimodo_tensors
+
+                    joints_pos, joints_rot, _local = amass_npz_to_kimodo_tensors(
+                        load_path,
+                        session.skeleton,
+                        device=demo.device,
+                    )
+                    foot_contacts = None
                 else:
-                    raise ValueError("NPZ file must contain 'joints_pos' or 'posed_joints'")
+                    # Extract motion data - handle different possible key names
+                    if "joints_pos" in data:
+                        joints_pos = tensor_from_numpy_on_device(data["joints_pos"], demo.device)
+                    elif "posed_joints" in data:
+                        joints_pos = tensor_from_numpy_on_device(data["posed_joints"], demo.device)
+                    else:
+                        raise ValueError(
+                            "NPZ file must contain AMASS keys (pose_body/root_orient/trans) "
+                            "or Kimodo keys (joints_pos/posed_joints)"
+                        )
 
-                if "joints_rot" in data:
-                    joints_rot = tensor_from_numpy_on_device(data["joints_rot"], demo.device)
-                elif "global_rot_mats" in data:
-                    joints_rot = tensor_from_numpy_on_device(data["global_rot_mats"], demo.device)
-                else:
-                    raise ValueError("NPZ file must contain 'joints_rot' or 'global_rot_mats'")
+                    if "joints_rot" in data:
+                        joints_rot = tensor_from_numpy_on_device(data["joints_rot"], demo.device)
+                    elif "global_rot_mats" in data:
+                        joints_rot = tensor_from_numpy_on_device(data["global_rot_mats"], demo.device)
+                    else:
+                        raise ValueError("NPZ file must contain 'joints_rot' or 'global_rot_mats'")
 
-                # Foot contacts are optional
-                foot_contacts = None
-                if "foot_contacts" in data:
-                    foot_contacts = tensor_from_numpy_on_device(data["foot_contacts"], demo.device)
+                    # Foot contacts are optional
+                    foot_contacts = None
+                    if "foot_contacts" in data:
+                        foot_contacts = tensor_from_numpy_on_device(data["foot_contacts"], demo.device)
 
                 # Support both batched [B, T, J, 3] and unbatched [T, J, 3]; take first sample if batched
                 if joints_pos.ndim == 4:
@@ -977,14 +1024,13 @@ def create_gui(
             @gui_load_motion_button.on_click
             def _(event: viser.GuiEvent) -> None:
                 event_client = event.client
-                session = get_active_session(event_client)
-                if session is None:
+                if get_active_session(event_client) is None:
                     return
 
                 try:
                     load_path = gui_load_motion_path_text.value
                     load_motion(event_client, load_path)
-
+                    session = demo.client_sessions[event_client.client_id]
                     event_client.add_notification(
                         title="Motion loaded!",
                         body=f"Loaded motion from {load_path} ({session.max_frame_idx + 1} frames, {session.cur_duration:.2f}s)",
@@ -1001,6 +1047,51 @@ def create_gui(
                         auto_close_seconds=10.0,
                         color="red",
                     )
+
+            @gui_gem_import_button.on_click
+            def _(event: viser.GuiEvent) -> None:
+                event_client = event.client
+
+                def _worker() -> None:
+                    try:
+                        video_path = gui_gem_video_path_text.value.strip()
+                        event_client.add_notification(
+                            title="GEM video import",
+                            body="Running GEM-SMPL on video (may take several minutes)…",
+                            auto_close_seconds=8.0,
+                            color="blue",
+                        )
+                        demo.import_motion_from_gem_video(
+                            event_client,
+                            video_path,
+                            static_cam=bool(gui_gem_static_cam_checkbox.value),
+                            detector=str(gui_gem_detector_dropdown.value),
+                        )
+                        if not demo.client_active(event_client.client_id):
+                            return
+                        session = demo.client_sessions[event_client.client_id]
+                        event_client.add_notification(
+                            title="Video import complete",
+                            body=(
+                                f"Loaded {session.max_frame_idx + 1} frames @ {session.model_fps:.0f} fps "
+                                f"from GEM."
+                            ),
+                            auto_close_seconds=6.0,
+                            color="green",
+                        )
+                    except Exception as e:
+                        import traceback
+
+                        traceback.print_exc()
+                        if demo.client_active(event_client.client_id):
+                            event_client.add_notification(
+                                title="GEM video import failed",
+                                body=str(e),
+                                auto_close_seconds=10.0,
+                                color="red",
+                            )
+
+                threading.Thread(target=_worker, daemon=True).start()
 
             def save_constraints(client, save_path):
                 session = demo.client_sessions[client.client_id]
@@ -2934,12 +3025,15 @@ def create_gui(
                             print(f"Unknown sample: {commit_name}")
                             return
 
+                        session.sample_commit_callback = None
                         for motion in session.motions.values():
                             if motion.character.skinned_mesh is not None:
                                 motion.character.skinned_mesh.remove_click_callback("all")
                             elif motion.character.g1_mesh_rig is not None:
                                 for handle in motion.character.g1_mesh_rig.mesh_handles:
                                     handle.remove_click_callback("all")
+                        for t800_motion in session.t800_motions.values():
+                            t800_motion.robot.clear_click_handlers()
 
                         demo.clear_motions(event_client.client_id)
                         demo.add_character_motion(event_client, **new_motion_kwargs)
@@ -2963,6 +3057,8 @@ def create_gui(
                         gui_save_constraints_button.disabled = False
                         gui_load_example_button.disabled = False
 
+                    # Human mesh click, or T800 robot click (see Demo._register_sample_commit_on_robots).
+                    session.sample_commit_callback = commit_motion
                     for motion in session.motions.values():
                         char = motion.character
                         character_name = char.name  # e.g. "character0"
@@ -2973,6 +3069,10 @@ def create_gui(
                             # and use highlight_group so the whole robot highlights together.
                             for handle in char.g1_mesh_rig.mesh_handles:
                                 handle.on_click(commit_motion, highlight_group=character_name)
+                    try:
+                        demo._register_sample_commit_on_robots(session)
+                    except Exception:
+                        pass
 
                     gui_edit_constraint_button.disabled = True
                     gui_generate_button.disabled = True

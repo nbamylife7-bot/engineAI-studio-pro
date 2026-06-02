@@ -66,3 +66,5 @@ class ClientSession:
     t800_preload_in_progress: bool = False
     t800_retarget_lock: threading.Lock = field(default_factory=threading.Lock)
     skin_precompute_generation: int = 0
+    # Set while a multi-sample result is on screen: click a human OR robot to commit that sample.
+    sample_commit_callback: object | None = None

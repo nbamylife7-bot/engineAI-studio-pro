@@ -543,6 +543,25 @@ class T800KimodoRobot:
         for _, handle in self._inner.geom_handles:
             handle.visible = self._visible
 
+    def register_click(self, callback, *, highlight_group: str | None = None) -> None:
+        """Attach a click callback to every robot mesh (e.g. to select a sample by the robot)."""
+        for _, handle in self._inner.geom_handles:
+            try:
+                handle.remove_click_callback("all")
+            except Exception:
+                pass
+            try:
+                handle.on_click(callback, highlight_group=highlight_group)
+            except TypeError:
+                handle.on_click(callback)
+
+    def clear_click_handlers(self) -> None:
+        for _, handle in self._inner.geom_handles:
+            try:
+                handle.remove_click_callback("all")
+            except Exception:
+                pass
+
     def clear(self) -> None:
         with self._update_lock:
             for _, handle in self._inner.geom_handles:

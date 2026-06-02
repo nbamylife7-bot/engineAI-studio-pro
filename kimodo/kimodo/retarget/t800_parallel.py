@@ -48,16 +48,18 @@ def _worker_init(counter=None, n_cores: int = 0) -> None:
         from kimodo.retarget.gmr_bootstrap import bootstrap_gmr
 
         bootstrap_gmr()
-        from general_motion_retargeting.utils.smpl import (
-            _get_cached_smplx_body_model,
-            resolve_smplx_model_file,
-        )
-        from scripts.smplx_npz_to_robot import resolve_smplx_body_models_path
-
+        # Warm the IK side (robot model parse + mink/daqp import). SMPL-X FK runs in the main
+        # process (option A), so workers never load the ~150 MB body model.
         try:
-            body_models = resolve_smplx_body_models_path()
-            model_file = resolve_smplx_model_file(str(body_models), "neutral")
-            _get_cached_smplx_body_model(model_file, "neutral")
+            from general_motion_retargeting import GeneralMotionRetargeting as GMR
+
+            GMR(
+                actual_human_height=1.7,
+                src_human="smplx",
+                tgt_robot="t800",
+                ik_safety_break=True,
+                verbose=False,
+            )
         except Exception:
             pass
     except Exception:
@@ -65,7 +67,7 @@ def _worker_init(counter=None, n_cores: int = 0) -> None:
 
 
 def _worker_retarget(args: dict):
-    """Run in a worker process: AMASS NPZ -> smoothed T800 qpos frames."""
+    """Legacy path: AMASS NPZ -> smoothed T800 qpos (SMPL-X FK runs in the worker)."""
     from kimodo.retarget.t800 import retarget_npz_to_qpos
 
     qpos_frames, motion_fps = retarget_npz_to_qpos(
@@ -79,7 +81,24 @@ def _worker_retarget(args: dict):
         smooth_window=args["smooth_window"],
         output_pkl=args.get("output_pkl"),
     )
-    # numpy arrays pickle cleanly back to the parent.
+    return args["key"], qpos_frames, motion_fps
+
+
+def _worker_retarget_prepared(args: dict):
+    """Option A: prepared SMPL-X frames (from the main process) -> smoothed T800 qpos. No torch."""
+    from kimodo.retarget.t800 import retarget_prepared_to_qpos
+
+    qpos_frames, motion_fps = retarget_prepared_to_qpos(
+        args["payload"],
+        args["fps"],
+        flatten_feet=args["flatten_feet"],
+        auto_ground=args["auto_ground"],
+        ik_safety_break=args["ik_safety_break"],
+        ik_stride=args["ik_stride"],
+        smooth=args["smooth"],
+        smooth_window=args["smooth_window"],
+        output_pkl=args.get("output_pkl"),
+    )
     return args["key"], qpos_frames, motion_fps
 
 

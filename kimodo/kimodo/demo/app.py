@@ -44,6 +44,8 @@ from .config import (
     KIMODO_HORIZON_LOGO_ELEVATION_DEG,
     KIMODO_HORIZON_LOGO_HEIGHT,
     KIMODO_HORIZON_LOGO_SIZE,
+    KIMODO_GEM_DEMO_MODEL,
+    KIMODO_GEM_ENABLED,
     KIMODO_T800_ENABLED,
     KIMODO_T800_HIDE_HUMAN_MESH,
     KIMODO_T800_SYNC_ATTACH,
@@ -1003,6 +1005,18 @@ class Demo:
             )
         if sync_reveal and show_robot:
             self._reveal_t800_robots(session, True)
+        self._register_sample_commit_on_robots(session)
+
+    def _register_sample_commit_on_robots(self, session: ClientSession) -> None:
+        """Let the user pick a sample by clicking a robot (works when the human mesh is hidden)."""
+        callback = getattr(session, "sample_commit_callback", None)
+        if callback is None or len(session.t800_motions) < 2:
+            return
+        for character_name, t800_motion in session.t800_motions.items():
+            try:
+                t800_motion.robot.register_click(callback, highlight_group=character_name)
+            except Exception as exc:
+                print(f"Failed to attach sample-select click on {character_name}: {exc}")
 
     def _retarget_t800_sequential(self, client, session, motions, **attach_kwargs) -> None:
         from kimodo.retarget import retarget_character_motion
@@ -1028,9 +1042,9 @@ class Demo:
         import tempfile
         from concurrent.futures import as_completed
 
-        from kimodo.retarget.t800 import export_motion_amass_npz
+        from kimodo.retarget.t800 import export_motion_amass_npz, prepare_t800_human_frames
         from kimodo.retarget.t800_parallel import (
-            _worker_retarget,
+            _worker_retarget_prepared,
             get_retarget_pool,
             resolve_worker_count,
         )
@@ -1045,33 +1059,33 @@ class Demo:
         on_progress = attach_kwargs.get("on_progress")
         tmp_dir = tempfile.mkdtemp(prefix="kimodo_t800_par_")
         try:
-            tasks = []
-            for character_name, motion in motions:
-                npz_path = os.path.join(tmp_dir, f"{character_name}.npz")
-                export_motion_amass_npz(motion, session.skeleton, session.model_fps, npz_path)
-                tasks.append(
-                    dict(
-                        key=character_name,
-                        npz_path=npz_path,
-                        fps=float(session.model_fps),
-                        flatten_feet=False,
-                        auto_ground=True,
-                        ik_safety_break=KIMODO_T800_IK_SAFETY,
-                        ik_stride=KIMODO_T800_IK_STRIDE,
-                        smooth=KIMODO_T800_SMOOTH,
-                        smooth_window=KIMODO_T800_SMOOTH_WINDOW,
-                        output_pkl=os.path.join(tmp_dir, f"{character_name}.t800.pkl"),
-                    )
-                )
-
-            workers = resolve_worker_count(KIMODO_T800_RETARGET_WORKERS, len(tasks))
+            workers = resolve_worker_count(KIMODO_T800_RETARGET_WORKERS, len(motions))
             if on_progress is not None:
-                on_progress(0.0, f"Retargeting {len(tasks)} samples on {workers} workers…")
-            print(f"[T800] parallel retarget: {len(tasks)} samples on {workers} workers")
+                on_progress(0.0, f"Retargeting {len(motions)} samples on {workers} workers…")
+            print(f"[T800] parallel retarget: {len(motions)} samples on {workers} workers")
 
             pool = get_retarget_pool(workers)
             motion_by_name = dict(motions)
-            futures = {pool.submit(_worker_retarget, task): task["key"] for task in tasks}
+            futures = {}
+            for character_name, motion in motions:
+                if not self.client_active(client.client_id):
+                    break
+                npz_path = os.path.join(tmp_dir, f"{character_name}.npz")
+                export_motion_amass_npz(motion, session.skeleton, session.model_fps, npz_path)
+                payload = prepare_t800_human_frames(npz_path, float(session.model_fps))
+                task = dict(
+                    key=character_name,
+                    payload=payload,
+                    fps=float(session.model_fps),
+                    flatten_feet=False,
+                    auto_ground=True,
+                    ik_safety_break=KIMODO_T800_IK_SAFETY,
+                    ik_stride=KIMODO_T800_IK_STRIDE,
+                    smooth=KIMODO_T800_SMOOTH,
+                    smooth_window=KIMODO_T800_SMOOTH_WINDOW,
+                    output_pkl=os.path.join(tmp_dir, f"{character_name}.t800.pkl"),
+                )
+                futures[pool.submit(_worker_retarget_prepared, task)] = character_name
 
             pending: list[tuple] = []
             done = 0
@@ -1085,7 +1099,7 @@ class Demo:
                 pending.append((character_name, motion, qpos_frames, motion_fps))
                 done += 1
                 if on_progress is not None:
-                    on_progress(0.0, f"Retargeted {done}/{len(tasks)}…")
+                    on_progress(0.0, f"Retargeted {done}/{len(futures)}…")
             pending.sort(key=lambda item: item[0])
             self._flush_t800_attachments(client, session, pending, **attach_kwargs)
         finally:
@@ -1271,6 +1285,110 @@ class Demo:
             self.retarget_t800_motions(client, session)
         except Exception as exc:
             print(f"T800 retargeting failed: {exc}")
+
+    def switch_session_model(self, client_id: int, model_name: str) -> ModelBundle:
+        """Load ``model_name`` for one client and reset its scene motions/constraints."""
+        session = self.client_sessions[client_id]
+        resolved = resolve_model_name(model_name)
+        if session.model_name == resolved and resolved in self.models:
+            return self.models[resolved]
+
+        session.playing = False
+        session.edit_mode = False
+
+        bundle = self.load_model(resolved)
+        self.clear_motions(client_id)
+        with session.timeline_data["keyframe_update_lock"]:
+            for constraint in list(session.constraints.values()):
+                constraint.clear()
+            session.constraints = self.build_constraint_tracks(session.client, bundle.skeleton)
+            session.timeline_data["keyframes"] = {}
+            session.timeline_data["intervals"] = {}
+            session.client.timeline.clear_keyframes()
+            session.client.timeline.clear_intervals()
+
+        session.model_name = resolved
+        session.model_fps = bundle.model_fps
+        session.skeleton = bundle.skeleton
+        session.motion_rep = bundle.motion_rep
+        session.frame_idx = 0
+        if "smplx" not in resolved.lower() or not KIMODO_T800_ENABLED:
+            self._clear_t800_bootstrap(session)
+            self.clear_t800_motions(client_id)
+        self._evict_unused_models()
+        return bundle
+
+    def import_motion_from_gem_video(
+        self,
+        client: viser.ClientHandle,
+        video_path: str,
+        *,
+        static_cam: bool = True,
+        detector: str | None = None,
+        yolo_period: int | None = None,
+    ) -> None:
+        """GEM-SMPL (GENMO) sidecar: video → AMASS NPZ → SMPL-X character + optional T800 retarget."""
+        import tempfile
+
+        from kimodo.imports.gem import (
+            amass_npz_to_kimodo_tensors,
+            gem_video_readiness_error,
+            import_video_to_amass_npz,
+            is_gem_video_ready,
+        )
+
+        if not KIMODO_GEM_ENABLED:
+            raise RuntimeError("GEM video import is disabled (KIMODO_GEM=0).")
+        if not is_gem_video_ready():
+            raise RuntimeError(
+                gem_video_readiness_error()
+                or "GEM (GENMO) is not installed. Run scripts/install_gem.sh or set KIMODO_GEM_ROOT."
+            )
+
+        client_id = client.client_id
+        if not self.client_active(client_id):
+            return
+        session = self.client_sessions[client_id]
+
+        self.switch_session_model(client_id, KIMODO_GEM_DEMO_MODEL)
+        session = self.client_sessions[client_id]
+        if not self.client_active(client_id):
+            return
+
+        video = os.path.abspath(os.path.expanduser(video_path.strip()))
+        if not os.path.isfile(video):
+            raise FileNotFoundError(f"Video not found: {video}")
+
+        with tempfile.TemporaryDirectory(prefix="kimodo_gem_") as tmp_dir:
+            amass_path = import_video_to_amass_npz(
+                video,
+                tmp_dir,
+                static_cam=static_cam,
+                detector=detector,
+                yolo_period=yolo_period,
+                fps=float(session.model_fps),
+            )
+            joints_pos, joints_rot, _local = amass_npz_to_kimodo_tensors(
+                amass_path,
+                session.skeleton,
+                device=self.device,
+            )
+
+        if not self.client_active(client_id):
+            return
+
+        num_frames = int(joints_pos.shape[0])
+        session.cur_duration = num_frames / float(session.model_fps)
+        session.max_frame_idx = max(0, num_frames - 1)
+        session.frame_idx = 0
+
+        self.clear_motions(client_id)
+        self.add_character_motion(client, session.skeleton, joints_pos, joints_rot)
+        try:
+            self.retarget_t800_motions(client, session)
+        except Exception as exc:
+            print(f"T800 retargeting after GEM import failed: {exc}")
+        self.set_frame(client_id, 0)
 
     def set_frame(self, client_id: int, frame_idx: int, update_timeline: bool = True):
         if not self.client_active(client_id):
