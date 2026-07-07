@@ -9,7 +9,7 @@ Kimodo demo on **Linux + NVIDIA GPU**: text-to-motion generation, NF4 text encod
 ## Quick start
 
 ```bash
-git clone https://github.com/nbamylife7-bot/engineAI-studio-pro.git
+git clone https://github.com/robofighter/engineAI-studio-pro.git
 cd engineAI-studio-pro
 
 sudo ./install_system_deps.sh    # once per machine
